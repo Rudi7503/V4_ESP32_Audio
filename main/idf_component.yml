@@ -1,0 +1,32 @@
+## Abhaengigkeiten fuer unseren I2S->BT-Probelauf auf ESP-IDF v6.1 + ESP-GMF v1.0.
+##
+## Gegenueber dem kopierten Beispiel (packages/esp_bt_audio/examples/bt_audio)
+## sind hier die override_path-Angaben entfernt. Sie zeigten relativ in den
+## geklonten esp-gmf-Baum (z.B. "../../../../../gmf_core") und laufen aus
+## unserem Projektordner heraus ins Leere. Alle Komponenten liegen mit ^1.0 in
+## der Registry, der Component Manager holt sie von dort.
+##
+## Entfernt: esp_board_manager (samt esp_boards), esp_lvgl_port, lvgl und
+## esp_jpeg. Sie haengen am Board-Manager bzw. an der abgeschalteten LVGL-
+## Oberflaeche (bt_ui/) und haben hier keine Funktion; esp_board_manager
+## brauchte zusaetzlich generierte Board-Tabellen, die es fuer unser Testboard
+## nicht gibt (deshalb die vier fehlenden g_esp_board_*-Symbole beim Linken).
+## Wir holen die Bluetooth-Streams direkt aus io_bt und die Dateien aus
+## io_file, ein Codec-Geraet gibt es auf dieser Platine nicht.
+##
+## gmf_ai_audio bleibt vorerst drin: stream_proc.c legt (noch) die
+## codec2bt-Pipeline mit dem Element ai_aec an.
+
+dependencies:
+  espressif/gmf_core:
+    version: "^1.0"
+  espressif/gmf_io:
+    version: "^1.0"
+  espressif/gmf_audio:
+    version: "^1.0"
+  espressif/gmf_misc:
+    version: "^1.0"
+  espressif/gmf_ai_audio:
+    version: "^1.0"
+  espressif/esp_bt_audio:
+    version: "^1.0"

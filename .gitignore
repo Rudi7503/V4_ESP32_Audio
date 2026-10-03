@@ -1,0 +1,26 @@
+﻿# ---------------------------------------------------------------------------
+# Build-Ausgaben und generierte Dateien - NICHT ins Repository
+# ---------------------------------------------------------------------------
+
+# Uebersetzte Artefakte (ca. 410 MB)
+build/
+
+# Vom Component Manager geladen (ca. 471 MB) - wiederherstellbar ueber
+# dependencies.lock und main/idf_component.yml
+managed_components/
+
+# Generierte Konfiguration. Die Vorlagen sdkconfig.defaults* GEHOEREN dazu.
+sdkconfig
+sdkconfig.old
+sdkconfig.backup*
+sdkconfig.bak*
+sdkconfig.vorheriger_lauf
+
+# Laufzeit-Ausgaben
+logs/
+*.log
+
+# Editor/OS
+.vscode/
+.DS_Store
+Thumbs.db

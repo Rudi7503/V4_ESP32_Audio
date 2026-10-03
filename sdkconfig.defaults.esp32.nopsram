@@ -1,0 +1,127 @@
+#
+# Bluetooth
+#
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+# CONFIG_BT_NIMBLE_ENABLED is not set
+# CONFIG_BT_CONTROLLER_ONLY is not set
+CONFIG_BT_CONTROLLER_ENABLED=y
+# CONFIG_BT_CONTROLLER_DISABLED is not set
+CONFIG_BTDM_CTRL_BR_EDR_MAX_SYNC_CONN=1
+
+#
+# Bluedroid Options
+#
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_ENC_KEY_SIZE_CTRL_VSC=y
+# CONFIG_BT_ENC_KEY_SIZE_CTRL_NONE is not set
+# CONFIG_BT_CLASSIC_BQB_ENABLED is not set
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_A2DP_USE_EXTERNAL_CODEC=y
+CONFIG_BT_AVRCP_ENABLED=y
+
+#
+# AVRCP Features
+#
+CONFIG_BT_AVRCP_CT_COVER_ART_ENABLED=y
+# end of AVRCP Features
+
+CONFIG_BT_HFP_ENABLE=y
+CONFIG_BT_HFP_CLIENT_ENABLE=y
+CONFIG_BT_HFP_AG_ENABLE=y
+# CONFIG_BT_HFP_AUDIO_DATA_PATH_PCM is not set
+CONFIG_BT_HFP_AUDIO_DATA_PATH_HCI=y
+CONFIG_BT_HFP_USE_EXTERNAL_CODEC=y
+# CONFIG_BT_BLE_ENABLED is not set
+#
+# Controller Options
+#
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
+# end of Bluetooth
+
+#
+# Example roles
+#
+# We are the A2DP *source*: the ESP32 sends audio to the headset. The role is a
+# Kconfig choice whose default is sink, so it has to be flipped explicitly here,
+# otherwise the example builds the sink pipelines (bt -> codec) that we cannot
+# feed on this board.
+CONFIG_GMF_EXAMPLE_A2DP_SOURCE=y
+# CONFIG_GMF_EXAMPLE_HFP_HF is not set
+CONFIG_GMF_EXAMPLE_AVRC_CT=y
+CONFIG_GMF_EXAMPLE_AVRC_TG=y
+
+#
+# SPI RAM config
+#
+# Our ESP32-D0WD-V3 module carries 8 MB PSRAM that only runs at 40 MHz; the
+# 80 MHz value inherited from the ESP32-S31 defaults makes the boot hang in the
+# PSRAM init.
+#
+# diesen Optionen. Das hat den Hauptschalter ausgehebelt: PSRAM war damit aus,
+# obwohl alle Unteroptionen gesetzt waren. Ein "PSRAM-Build" war Bit fuer Bit
+# identisch mit dem Build ohne PSRAM (gleiche Imagegroesse) - aufgefallen ist es
+#
+#
+#
+# Task-Stacks im PSRAM erlauben (die GMF-Pipelines setzen stack_in_ext=true).
+# GMF-Warnung genannt wird, gibt es nicht mehr:
+#
+#
+# Ohne diesen Schalter bricht der Start ab, wenn kein PSRAM antwortet:
+#
+#   E quad_psram: PSRAM ID read error: 0xffffffff, PSRAM chip not found
+#   E cpu_start: Failed to init external RAM!
+#   abort() was called ... Rebooting...
+#
+# (Endlos-Neustart, im seriellen Log nur ein Byte-Strom.) Genau das passiert mit
+# einem ESP32-Modul OHNE PSRAM. Mit IGNORE_NOTFOUND laeuft die Anwendung dann
+# auf dem internen RAM weiter - etwas knapper, aber messbar. So ist die
+# Messreihe nicht davon abhaengig, welches Modul gerade gesteckt ist.
+# CONFIG_SPIRAM is not set
+# end of ESP PSRAM
+
+#
+# Flash-Takt auf 40 MHz.
+#
+# WARUM (Befund vom 02.10.): mit PSRAM laeuft der Flash zwangsweise mit 40 MHz,
+# weil sich Flash und PSRAM den SPI-Takt teilen. Ohne PSRAM zieht ESP-IDF
+# dagegen 80 MHz. Und genau daran haengt die SD-Karte:
+#
+#   WROVER + Build MIT PSRAM  (Flash 40 MHz) -> SD mountet
+#   WROVER + Build OHNE PSRAM (Flash 80 MHz) -> SD: 0x107 im CIU-Clock-Update
+#   WROOM  + Build OHNE PSRAM (Flash 80 MHz) -> SD: 0x107
+#
+# Der SDMMC-Takt kommt aus derselben PLL wie der Flash-Takt. Mit dieser Zeile
+# laeuft der Flash auch ohne PSRAM mit 40 MHz - dann muss die SD auf allen
+# Modulen gehen, unabhaengig von PSRAM.
+#
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+# CONFIG_ESPTOOLPY_FLASHFREQ_80M is not set
+CONFIG_ESPTOOLPY_FLASHFREQ="40m"
+
+#
+# Bootloader-Log auf INFO.
+#
+# WARUM: der Bootloader gibt bei JEDEM Start den Takt aus, mit dem er den Flash
+# anspricht - das ist der belastbarste Laufzeit-Nachweis:
+#
+#   I (24) boot: SPI Speed      : 40MHz
+#   I (28) boot: SPI Mode       : DIO
+#   I (32) boot: SPI Flash Size : 4MB
+#
+# Mit dem bisherigen WARN-Level wurden diese Zeilen beim Uebersetzen entfernt -
+# im Bootloader-Binary kamen die Strings "SPI Speed", "SPI Mode" und "boot:"
+# nachweislich NICHT vor. Deshalb war nie sichtbar, welcher Takt wirklich
+# anliegt.
+#
+CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
+# CONFIG_BOOTLOADER_LOG_LEVEL_WARN is not set
+CONFIG_BOOTLOADER_LOG_LEVEL=3
+
+#
+# ESP System Settings
+#
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
