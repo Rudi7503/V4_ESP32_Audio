@@ -595,55 +595,6 @@ static int cmd_mixer(int argc, char **argv)
     return 0;
 }
 
-/*
- * "bufstat [reset]" - Zustand der Puffermessung.
- *
- * Das ist der Griff, der die fuenf Messfaelle vergleichbar macht: vor jedem
- * Fall einmal 'bufstat reset', dann gehoeren "Minimum" und "leer N mal"
- * eindeutig zu diesem Fall.
- *
- * Der Unterlauf-Fall ist: Minimum 0 UND leer N mal mit N > 0.
- */
-static int cmd_bufstat(int argc, char **argv)
-{
-    bool reset = (argc > 1 && strcmp(argv[1], "reset") == 0);
-    if (reset) {
-        stream_proc_buffer_stats(true, NULL, NULL, NULL, NULL);
-        /*
-         * Kurz warten, bis der Puffer-Task (1-s-Takt) den Reset abgeholt hat.
-         * Ohne das koennte ein sofort folgendes "bufstat" noch die alten Werte
-         * zeigen - und ein Reset ohne sichtbare Wirkung ist genau die Art
-         * Fehler, die uns schon Zeit gekostet hat.
-         */
-        vTaskDelay(pdMS_TO_TICKS(1200));
-
-        int mi = -1, ei = 0, mf = -1, ef = 0;
-        stream_proc_buffer_stats(false, &mi, &ei, &mf, &ef);
-        printf("Pufferstatistik zurueckgesetzt und laeuft.\n");
-        printf("  I2S-Zweig  : Minimum %d Byte, leer %d mal\n", mi, ei);
-        printf("  Datei-Zweig: Minimum %d Byte, leer %d mal\n", mf, ef);
-        return 0;
-    }
-
-    int min_i2s = -1, empty_i2s = 0, min_file = -1, empty_file = 0;
-    stream_proc_buffer_stats(false, &min_i2s, &empty_i2s, &min_file, &empty_file);
-
-    printf("Pufferstatistik (seit dem letzten Reset):\n");
-    if (min_i2s < 0) {
-        printf("  I2S-Zweig  : noch nichts gemessen (Zweig nicht verbunden?)\n");
-    } else {
-        printf("  I2S-Zweig  : Minimum %d Byte, leer %d mal%s\n",
-               min_i2s, empty_i2s, (min_i2s == 0 && empty_i2s > 0) ? "  <-- UNTERLAUF" : "");
-    }
-    if (min_file < 0) {
-        printf("  Datei-Zweig: noch nichts gemessen (keine Datei abgespielt?)\n");
-    } else {
-        printf("  Datei-Zweig: Minimum %d Byte, leer %d mal%s\n",
-               min_file, empty_file, (min_file == 0 && empty_file > 0) ? "  (ohne Datei normal)" : "");
-    }
-    printf("Zuruecksetzen: 'bufstat reset'\n");
-    return 0;
-}
 #endif  /* CONFIG_BT_CLASSIC_ENABLED && defined(CONFIG_GMF_EXAMPLE_A2DP_SOURCE) */
 void cli_register_bt(void){
     const esp_console_cmd_t play_cmd = {
@@ -855,14 +806,7 @@ void cli_register_bt(void){
     }
 
     {
-        const esp_console_cmd_t bufstat_cmd = {
-            .command = "bufstat",
-            .help = "Ring buffer stats: min fill and empty count; 'bufstat reset' restarts the measurement",
-            .hint = "[reset]",
-            .func = &cmd_bufstat,
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&bufstat_cmd));
-    }
+        }
 
     {
         }

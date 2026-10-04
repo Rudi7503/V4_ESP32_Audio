@@ -103,21 +103,3 @@ void i2s2bt_set_mixer_wait(int prefill_ms, int transit_ms);
  */
 void i2s2bt_get_mixer_wait(int *prefill_ms, int *transit_ms);
 
-/**
- * @brief  Pufferstatistik der Zubringer-Ringpuffer lesen oder neu starten
- *
- * "Minimum" und "leer N mal" laufen sonst seit dem Einschalten weiter und waeren
- * ueber mehrere Messfaelle hinweg nicht vergleichbar. Vor jedem Fall einmal
- * zuruecksetzen.
- *
- * Der Unterlauf-Fall ist: min_* == 0 und empty_* > 0.
- *
- * @param[in]   reset       true = Zaehler neu starten (die uebrigen Parameter
- *                          werden dann nicht beschrieben)
- * @param[out]  min_i2s     kleinster Fuellstand des I2S-Zweigs (-1 = noch nichts gemessen)
- * @param[out]  empty_i2s   Anzahl Sekunden mit leerem I2S-Puffer
- * @param[out]  min_file    kleinster Fuellstand des Datei-Zweigs (-1 = nichts gemessen)
- * @param[out]  empty_file  Anzahl Sekunden mit leerem Datei-Puffer
- */
-void stream_proc_buffer_stats(bool reset, int *min_i2s, int *empty_i2s,
-                              int *min_file, int *empty_file);

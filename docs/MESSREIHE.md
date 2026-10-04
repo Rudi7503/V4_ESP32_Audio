@@ -876,3 +876,30 @@ mixer_task 23 %, i2s2bt_task 8,5 %, io_i2s 4,6 %.
 * Der MP3-Decoder braucht 28 KB am Stueck; mit 32 KB groesstem Block ist der
   Abstand jetzt komfortabel, ein Ballon (Reservierung) ist nicht noetig.
 * Noch offen: I2C-Protokoll fuer die V4, EQ/Hall, SBC-Rate 44100 vs 48000.
+
+---
+
+## 11. Nachtrag 04.10.2026: leises Knacken im Sekundentakt (0.9.40 -> 0.9.41)
+
+Nach dem Aufraeumen (0.9.40) war der Ton der Dateien sauber, aber die Vampire
+hatte ein **leises Knacken etwa jede Sekunde**.
+
+Ursache: die Puffer-Diagnose. `buffer_mon_task` lief im **Sekundentakt** und las
+dabei ueber `esp_gmf_db_get_filled_size()` den Fuellstand **beider Ringpuffer** -
+auch designigen des I2S-Zweigs. Dieses Lesen nimmt kurz die Sperre des
+Ringpuffers. Der I2S-Zubringer (Echtzeit!) musste in dieser Zeit warten, und
+diese kleine Luecke war als Knacken zu hoeren. Der Task lief zwar mit niedriger
+Prioritaet (2), aber die Sperre wirkt unabhaengig von der Prioritaet.
+
+Behebung: die komplette Puffer-Diagnose ist entfallen - der Task, die
+Zaehlertabelle, `bufstat` und die 2-ms-Messung. Ein Ringpuffer wird jetzt nur
+noch beim Titelwechsel gelesen (dort, wo er ohnehin geleert wird) und auf
+ausdrueckliche Anfrage.
+
+Lehre fuer die Zukunft: **im Audio-Pfad nichts messen.** Ein Ringpuffer, der von
+einem Echtzeit-Zweig beschrieben wird, darf nicht nebenher abgefragt werden -
+auch nicht "nur lesend" und auch nicht aus einem Task mit niedriger Prioritaet.
+
+Messwerte 0.9.41 (WROVER, kein PSRAM, Soundbar 48000 Hz, Dateien im Wechsel):
+Stream laeuft, 0 Resets, 0 Job-Fehler, freier Heap 78 204 Byte, groesster
+zusammenhaengender Block 30 720 Byte, CPU Kern0 37-40 %, Kern1 71-73 %.

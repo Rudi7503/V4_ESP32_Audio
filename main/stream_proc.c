@@ -147,10 +147,8 @@ static esp_gmf_pipeline_handle_t i2s2bt_pipe = NULL;
 static esp_bt_audio_stream_handle_t i2s2bt_stream = NULL;
 
 
-/*
- * Die beiden Ringpuffer zwischen Zubringer und Mischer, fuer die
- * Puffer-Diagnose (siehe buffer_mon_task).
- */
+/* Die beiden Ringpuffer zwischen Zubringer und Mischer (siehe
+ * connect_branch_to_mixer). */
 static esp_gmf_db_handle_t i2s_branch_db = NULL;
 static esp_gmf_db_handle_t file_branch_db = NULL;
 
@@ -173,107 +171,12 @@ static volatile bool i2s2bt_requested = false;
 /* Vorwaertsdeklaration: der Stream-Callback steht weiter oben in der Datei. */
 void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream);
 
-/*
- * Zustand der Puffermessung - steht hier oben, weil i2s2bt_set_stream() ihn
- * beim Stream-Start zuruecksetzt. Die Task dazu (buffer_mon_task) folgt weiter
- * unten.
- *
- * Die Zaehler muessen sich ZURUECKSETZEN lassen: vorher liefen "Minimum" und
- * "leer N mal" seit dem Einschalten weiter - ein Wert wie "leer 13 mal" sagte
- * damit nichts ueber den gerade laufenden Fall, sondern ueber alles davor. Fuer
- * die Messreihe (fuenf Faelle nacheinander) waeren die Zahlen so nicht
- * vergleichbar gewesen.
- *
- * Zurueckgesetzt wird beim Start eines Streams und mit "bufstat reset".
- * Der Unterlauf-Fall ist: min_filled == 0 zusammen mit empty_hits > 0.
- */
-typedef struct {
-    const char *name;
-    esp_gmf_db_handle_t *db;
-    uint32_t min_filled;
-    uint32_t empty_hits;
-    uint32_t last_filled;
-    bool ever_filled;
-} buf_watch_t;
-
-static buf_watch_t s_buf_watch[2] = {
-    { "I2S-Zweig  ", &i2s_branch_db,  UINT32_MAX, 0, 0, false },
-    { "Datei-Zweig", &file_branch_db, UINT32_MAX, 0, 0, false },
-};
-static volatile bool s_buf_reset_request = false;
-
-/*
- * Setzt die Zaehler auf 0 UND loescht die Anforderung.
- *
- * Das Loeschen gehoert hierher, nicht in die Aufrufer: steht es nur beim
- * regulaeren Weg, bleibt die Anforderung nach einem "bufstat reset" stehen und
- * die Zaehler werden jede Sekunde neu genullt. Genau das war auf Hardware zu
- * sehen - die Zeile "Puffer-Messung laeuft ab jetzt" kam jede Sekunde statt
- * einmal, und "Minimum" war damit immer der zuletzt gemessene Wert statt das
- * Minimum ueber den Lauf.
- */
-/*
- * Ringpuffer im Millisekundenraster messen (0.9.36).
- *
- * Die 1-s-Messung sagt nur "leer" oder "voll". Fuer das Stottern ist aber
- * entscheidend, wie oft der Puffer UNTER die Mischer-Blockgroesse faellt:
- * der Mischer holt je Aufruf MIXER_PROC_BYTES Byte und fuellt den Rest mit
- * Nullen (esp_gmf_mixer.c:216). Jeder Treffer darunter ist ein hoerbarer
- * Aussetzer. Deshalb wird hier 2 s lang alle 2 ms gemessen.
- */
-static void buffer_stats_schnell(const char *name, esp_gmf_db_handle_t db, uint32_t schwelle)
-{
-    if (db == NULL) {
-        return;
-    }
-    uint32_t min_f = UINT32_MAX, max_f = 0, unter = 0, n = 0;
-    int64_t ende = esp_timer_get_time() + 2000000;   /* 2 s */
-    while (esp_timer_get_time() < ende) {
-        uint32_t f = 0, t = 0;
-        if (esp_gmf_db_get_filled_size(db, &f) == ESP_GMF_ERR_OK &&
-            esp_gmf_db_get_total_size(db, &t) == ESP_GMF_ERR_OK) {
-            if (f < min_f) { min_f = f; }
-            if (f > max_f) { max_f = f; }
-            if (f < schwelle) { unter++; }
-            n++;
-        }
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
-    if (n == 0) {
-        return;
-    }
-    ESP_LOGI(TAG, "%s: %u Messungen in 2 s | Minimum %u, Maximum %u Byte | %u mal unter %u Byte (%.1f %%)",
-             name, (unsigned)n, (unsigned)((min_f == UINT32_MAX) ? 0 : min_f), (unsigned)max_f,
-             (unsigned)unter, (unsigned)schwelle, (100.0f * unter) / n);
-}
-
-static void buffer_stats_reset(void)
-{
-    for (int i = 0; i < 2; i++) {
-        s_buf_watch[i].min_filled = UINT32_MAX;
-        s_buf_watch[i].empty_hits = 0;
-        s_buf_watch[i].last_filled = 0;
-        s_buf_watch[i].ever_filled = false;
-    }
-    s_buf_reset_request = false;
-}
-
 /* Diagnose-Helfer (Definition weiter unten, benutzt schon in den Aufbauten). */
 static const char *gmf_state_to_str(int state);
 static int port_count(esp_gmf_port_handle_t head);
 static void dump_pipeline(const char *what, esp_gmf_pipeline_handle_t pipe);
 static void dump_pipeline_state(const char *what, esp_gmf_pipeline_handle_t pipe);
 
-/*
- * Wiedergabe am Dateiende beenden - Muster aus den offiziellen GMF-Beispielen
- * (gmf_examples/pipeline_play_sdcard_music, pipeline_loop_play_no_gap): das
- * Pipeline-Event wird nur GEMERKT, gestoppt wird ausserhalb des GMF-Tasks.
- * Der Event-Callback laeuft im Kontext des GMF-Tasks; ein Stop von dort heraus
- * wuerde auf sich selbst warten.
- *
- * Ohne den Stop bleibt die A2DP-Uebertragung nach dem letzten Byte offen, und
- * man hoert ueber Bluetooth ein leises Brummen, das nicht mehr aufhoert.
- */
 static void local2bt_request_stop(void)
 {
     local2bt_stop_requested = true;
@@ -1574,8 +1477,6 @@ static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
  * leer). 20 KB je Zweig ist der Kompromiss: genug Reserve gegen kurze Stockungen,
  * aber es bleibt Speicher fuer den Mischer.
  *
- * Nachgeprueft wird das von buffer_mon_task(), das Fuellstand und Leerlaeufe
- * ins Log schreibt.
  */
 /*
  * WARUM 12 UND NICHT MEHR 20 (geaendert 03.10.):
@@ -1928,12 +1829,6 @@ void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream)
     i2s2bt_stream = stream;
     esp_gmf_io_bt_set_stream(ESP_GMF_PIPELINE_GET_OUT_INSTANCE(mixer_pipe), stream);
 
-    /*
-     * Pufferstatistik auf null: ab hier gehoeren "Minimum" und "leer N mal"
-     * eindeutig zu DIESEM Lauf. Ohne das zaehlten sie seit dem Einschalten
-     * weiter und die fuenf Messfaelle waeren nicht vergleichbar.
-     */
-    s_buf_reset_request = true;
 
     esp_gmf_err_t ret = ESP_GMF_ERR_OK;
 
@@ -2556,120 +2451,7 @@ static void setup_cpu_load_task(void)
  * Abtastungen leer sein. Fuer die Frage "ist genug Reserve da" reicht das aber,
  * und der Task laeuft mit niedriger Prioritaet (2), stoert den Ton also nicht.
  */
-#define BUF_MON_INTERVAL_MS 1000
 
-static void buffer_mon_task(void *arg)
-{
-    (void)arg;
-    int ticks = 0;
-    bool announced = false;
-
-    /* Die Zaehler stehen auf Dateiebene; hier nur der Startzustand. */
-    buffer_stats_reset();
-
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(BUF_MON_INTERVAL_MS));
-        ticks++;
-
-        /* Ein Neustart des Streams oder "bufstat reset" setzt die Zaehler auf 0. */
-        if (s_buf_reset_request) {
-            buffer_stats_reset();
-            ticks = 0;
-            announced = false;
-        }
-
-        for (int i = 0; i < 2; i++) {
-            if (*s_buf_watch[i].db == NULL) {
-                continue;               /* Zweig nicht verbunden (z.B. I2S_MODE 0) */
-            }
-            uint32_t filled = 0;
-            uint32_t total = 0;
-            if (esp_gmf_db_get_filled_size(*s_buf_watch[i].db, &filled) != ESP_GMF_ERR_OK) {
-                continue;
-            }
-            if (esp_gmf_db_get_total_size(*s_buf_watch[i].db, &total) != ESP_GMF_ERR_OK || total == 0) {
-                continue;
-            }
-            if (filled == 0) {
-                s_buf_watch[i].empty_hits++;
-            }
-            if (filled < s_buf_watch[i].min_filled) {
-                s_buf_watch[i].min_filled = filled;
-            }
-            if (filled > 0) {
-                s_buf_watch[i].ever_filled = true;
-            }
-
-            if (!announced) {
-                announced = true;
-                ESP_LOGI(TAG, "Puffer-Messung laeuft ab jetzt (Zaehler bei 0)");
-            }
-
-            /*
-             * Nicht jede Sekunde zwei Zeilen - das sind bei 115200 Baud rund
-             * 9 ms UART-Zeit pro Sekunde und macht das Log unlesbar.
-             * Gemeldet wird nur, wenn sich der Fuellstand deutlich aendert,
-             * zusaetzlich alle 10 s eine Zusammenfassung.
-             */
-            int diff = (int)filled - (int)s_buf_watch[i].last_filled;
-            bool changed = (diff > 4096) || (diff < -4096);
-            bool summary = ((ticks % 10) == 0);
-            if (changed || summary) {
-                /*
-                 * Nur beim Datei-Zweig und nur bei der 10-s-Zusammenfassung:
-                 * 2 s im 2-ms-Raster messen, um zu sehen, ob der Puffer unter
-                 * die Mischer-Blockgroesse faellt (dann fuellt der Mischer
-                 * Nullen -> Stottern).
-                 */
-                if (summary && (i == 1)) {
-                    buffer_stats_schnell("Datei-Zweig (2-ms-Raster)", *s_buf_watch[i].db, MIXER_PROC_BYTES);
-                }
-                ESP_LOGI(TAG, "Puffer %s: %u/%u Byte (%u%%), Minimum %u, leer %u mal%s",
-                         s_buf_watch[i].name, (unsigned)filled, (unsigned)total,
-                         (unsigned)(filled * 100 / total),
-                         (unsigned)s_buf_watch[i].min_filled, (unsigned)s_buf_watch[i].empty_hits,
-                         s_buf_watch[i].ever_filled ? "" : "  [noch NIE gefuellt!]");
-                s_buf_watch[i].last_filled = filled;
-            }
-        }
-    }
-}
-
-/*
- * Kommando "bufstat [reset]": Zustand der Puffermessung zeigen bzw. neu starten.
- *
- * Fuer die Messreihe ist das der wichtigste Griff: vor jedem Fall einmal
- * zuruecksetzen, dann gehoeren "Minimum" und "leer N mal" eindeutig zu diesem
- * Fall. Der Unterlauf-Fall ist "Minimum 0" zusammen mit "leer N mal", N > 0.
- */
-void stream_proc_buffer_stats(bool reset, int *min_i2s, int *empty_i2s,
-                              int *min_file, int *empty_file)
-{
-    if (reset) {
-        s_buf_reset_request = true;
-        return;
-    }
-    if (min_i2s != NULL) {
-        *min_i2s = (s_buf_watch[0].min_filled == UINT32_MAX) ? -1 : (int)s_buf_watch[0].min_filled;
-    }
-    if (empty_i2s != NULL) {
-        *empty_i2s = (int)s_buf_watch[0].empty_hits;
-    }
-    if (min_file != NULL) {
-        *min_file = (s_buf_watch[1].min_filled == UINT32_MAX) ? -1 : (int)s_buf_watch[1].min_filled;
-    }
-    if (empty_file != NULL) {
-        *empty_file = (int)s_buf_watch[1].empty_hits;
-    }
-}
-
-static void setup_buffer_mon_task(void)
-{
-    BaseType_t ret = xTaskCreatePinnedToCore(buffer_mon_task, "buf_mon", 3072, NULL, 2, NULL, 0);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Puffer-Monitor konnte nicht angelegt werden");
-    }
-}
 
 /*
  * Diagnose: zeigt je Element der Kette, ob es ein dependency-Element ist, ob es
@@ -2738,5 +2520,5 @@ void stream_proc_init(esp_gmf_pool_handle_t pool)
     setup_local2bt_eof_task();
     setup_cpu_load_task();
     log_buffer_sizes();
-    setup_buffer_mon_task();
+
 }
