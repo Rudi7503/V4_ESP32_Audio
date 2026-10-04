@@ -575,63 +575,6 @@ static int cmd_i2s_media(int argc, char **argv)
     printf("Use 'connect <mac>' and 'start_media' first, or 'i2s_media off' to stop.\n");
     return 0;
 }
-
-/*
- * "i2smode [0..4]" - welcher I2S-Zweig gebaut wird.
- *
- * Ohne Argument wird nur angezeigt, was gerade gilt. Mit Argument wird der Wert
- * gesetzt; er wirkt beim NAECHSTEN Start, weil der Zweig in stream_proc_init()
- * entsteht.
- *
- * WOZU: das Flashen kostet hier jedes Mal Handarbeit (BOOT halten, EN tippen,
- * ab- und wieder anstecken). Mit diesem Kommando laesst sich die ganze
- * Messreihe - 0 ohne I2S, 1 GMF, 2 linear, 3 GMF-Shift+GMF-Rate, 4 eigener
- * Shift+GMF-Rate - mit EINEM geflashten Image vergleichen. Verglichen wird
- * immer dieselbe Sache: die CPU-Last je Kern (cpu_load_task) und der
- * Pufferstand (buffer_mon_task).
- */
-static int cmd_i2smode(int argc, char **argv)
-{
-    static const char *namen[] = {
-        "aus (nur Datei-Zweig)",
-        "GMF: rate -> bit",
-        "linear (eigener Q16.16-Umsetzer)",
-        "Shift (GMF-Bitwandler) -> GMF-Rate",
-        "wie 3 (eigener Shift in 0.9.14 entfernt)",
-    };
-
-    if (argc < 2) {
-        int m = i2s2bt_get_mode();
-        printf("I2S-Modus: %d = %s\n", m, (m >= 0 && m <= 4) ? namen[m] : "?");
-        printf("Aendern: 'i2smode <0..4>' - der Wert wird gespeichert und wirkt nach 'restart'.\n");
-        return 0;
-    }
-
-    int mode = atoi(argv[1]);
-    if (mode < 0 || mode > 4) {
-        printf("Modus muss 0..4 sein (ist: %s)\n", argv[1]);
-        return 1;
-    }
-    if (i2s2bt_set_mode(mode) != ESP_OK) {
-        printf("Modus konnte nicht gesetzt werden\n");
-        return 1;
-    }
-    printf("I2S-Modus %d = %s gesetzt und gespeichert.\n", mode, namen[mode]);
-    printf("Wirkt nach 'restart' (der Zweig wird beim Start gebaut).\n");
-    return 0;
-}
-
-/*
- * "mixer [prefill_ms] [transit_ms]" - die beiden Wartezeiten des Mischers.
- *
- * prefill_ms  Wartezeit zwischen Start der Zubringer und Start des Mischers.
- * transit_ms  transit_time je Mischer-Quelle.
- *
- * Beide wirken beim naechsten Stream-Aufbau (also nach 'start_media').
- * Zum Pruefen, ob die Puffer unterlaufen koennen, gehoert immer der Blick auf
- * die Zeilen "Puffer I2S-Zweig"/"Puffer Datei-Zweig": bleibt "Minimum" deutlich
- * ueber 0 und "leer" bei 0 mal, traegt der Puffer.
- */
 static int cmd_mixer(int argc, char **argv)
 {
     if (argc >= 2) {
@@ -702,23 +645,6 @@ static int cmd_bufstat(int argc, char **argv)
     return 0;
 }
 #endif  /* CONFIG_BT_CLASSIC_ENABLED && defined(CONFIG_GMF_EXAMPLE_A2DP_SOURCE) */
-
-/*
- * "i2sstat" - Durchsatz des I2S-Eingangs (Vampire) auslesen.
- *
- * Die GMF-Bibliothek fuehrt die Statistik, loggt sie aber nicht selbst. Sollwert
- * bei 60 kHz, 32 Bit, stereo: 3840 kbit/s. Ein Einbruch im Wert "aktuell"
- * gegenueber "Mittel" zeigt Luecken im Zubringer - die Ursache der Ruckler und
- * (weil der Mischer mit Nullen auffuellt) der tiefen Verzerrungen.
- */
-static int cmd_i2sstat(int argc, char **argv)
-{
-    (void)argc;
-    (void)argv;
-    i2s2bt_log_io_speed();
-    return 0;
-}
-
 void cli_register_bt(void){
     const esp_console_cmd_t play_cmd = {
         .command = "play",
@@ -916,14 +842,7 @@ void cli_register_bt(void){
     ESP_ERROR_CHECK(esp_console_cmd_register(&i2s_media_cmd));
 
     {
-        const esp_console_cmd_t i2smode_cmd = {
-            .command = "i2smode",
-            .help = "Which I2S branch to build: 0=off, 1=GMF, 2=linear, 3=Shift(GMF)+GMF-rate, 4=Shift(own)+GMF-rate",
-            .hint = "[0..4]",
-            .func = &cmd_i2smode,
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&i2smode_cmd));
-    }
+        }
 
     {
         const esp_console_cmd_t mixer_cmd = {
@@ -946,14 +865,7 @@ void cli_register_bt(void){
     }
 
     {
-        const esp_console_cmd_t i2sstat_cmd = {
-            .command = "i2sstat",
-            .help = "Durchsatz des I2S-Eingangs auslesen (Sollwert 3840 kbit/s)",
-            .hint = NULL,
-            .func = &cmd_i2sstat,
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&i2sstat_cmd));
-    }
+        }
 #endif  /* CONFIG_BT_CLASSIC_ENABLED && defined(CONFIG_GMF_EXAMPLE_A2DP_SOURCE) */
 
 #if CONFIG_GMF_EXAMPLE_AUDIO_TECH_LE

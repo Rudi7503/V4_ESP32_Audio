@@ -84,37 +84,6 @@ void i2s2bt_stop(void);
  */
 bool i2s2bt_is_ready(void);
 
-/**
- * @brief  Durchsatz des I2S-Eingangs ins Log schreiben
- *
- * Liest die von GMF gefuehrte Durchsatz-Statistik des io_i2s (die Bibliothek
- * loggt sie nicht selbst). Sollwert 3840 kbit/s bei 60 kHz/32 Bit/stereo;
- * Einbrueche im Wert "aktuell" zeigen Luecken im Zubringer.
- */
-void i2s2bt_log_io_speed(void);
-
-/**
- * @brief  Set which I2S branch is built (Messfall 0..4)
- *
- * Der Zweig wird in stream_proc_init() gebaut, also VOR dem ersten Start.
- * Ein Wechsel zur Laufzeit wirkt deshalb erst nach einem Neustart - das steht
- * so auch im CLI-Kommando. Der Wert ist der Zweck der ganzen Messreihe:
- * mit einem einzigen geflashten Image lassen sich alle Faelle vergleichen,
- * ohne fuer jeden Fall neu zu flashen.
- *
- * @param[in]  mode  0=aus, 1=GMF(rate+bit), 2=linear, 3=GMF-Shift+GMF-Rate,
- *                   4=eigener Shift+GMF-Rate
- *
- * @return
- *       - ESP_OK               Mode uebernommen
- *       - ESP_ERR_INVALID_ARG  Mode ausserhalb 0..4
- */
-esp_err_t i2s2bt_set_mode(int mode);
-
-/**
- * @brief  Which I2S branch will be built at the next start
- */
-int i2s2bt_get_mode(void);
 
 /**
  * @brief  Wartezeiten des Mischers setzen (Laufzeit, kein Neustart noetig)

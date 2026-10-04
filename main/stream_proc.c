@@ -146,30 +146,6 @@ static esp_gmf_task_handle_t i2s2bt_task = NULL;
 static esp_gmf_pipeline_handle_t i2s2bt_pipe = NULL;
 static esp_bt_audio_stream_handle_t i2s2bt_stream = NULL;
 
-/*
- * Welcher I2S-Zweig gebaut wird (Messfall).
- *
- * Der Startwert kommt aus dem Uebersetzungsschalter I2S_MODE
- * (main/CMakeLists.txt) und wird beim Start durch den im NVS gespeicherten
- * Wert ersetzt, falls einer da ist.
- *
- * WARUM NVS: der Zweig entsteht in stream_proc_init(), also beim Start - ein
- * Wechsel wirkt deshalb immer erst nach einem Neustart. Ohne Speicherung ist
- * der Wert nach dem Neustart aber wieder der Build-Wert, und die Umschaltung
- * waere wirkungslos (auf Hardware genau so gesehen: "I2S-Modus 4 gesetzt",
- * danach restart, danach lief wieder 2). Mit NVS genuegt:
- *
- *   i2smode 4      (wird sofort gespeichert)
- *   restart        (baut den Zweig dann wirklich als Fall 4)
- *
- * Der Wert wird bewusst NICHT automatisch auf den Build-Wert zurueckgesetzt:
- * sonst waere die Messreihe nicht durchfuehrbar. Zur Kontrolle steht der
- * gespeicherte Wert in der Startzeile.
- */
-#define I2S_MODE_NVS_NAMESPACE  "v4cfg"
-#define I2S_MODE_NVS_KEY        "i2s_mode"
-
-static int s_i2s_mode = I2S_MODE;
 
 /*
  * Die beiden Ringpuffer zwischen Zubringer und Mischer, fuer die
@@ -1503,110 +1479,15 @@ static void setup_pipeline_local2bt(esp_gmf_pool_handle_t pool)
 static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
 {
     /*
-     * Der I2S-Zweig haengt an I2S_MODE (siehe main/CMakeLists.txt):
-     *   0 = gar nicht anlegen (nur Datei-Zweig)
-     *   1 = beide GMF-Wandler (polyphasisch)
-     *   2 = eigener linearer Umsetzer (Vorgabe)
-     *   3 = erst 32->16 Bit mit GMF-Bitwandler, DANN GMF-Ratenwandlung
-     *   4 = wie 3 (eigener Shifter gesperrt, siehe case 4)
+     * Der I2S-Zweig besteht aus EINEM Element: aud_lin_resample
+     * (linear_resample.c) - 60000 Hz/32 Bit -> A2DP-Rate/16 Bit, stereo.
      *
-     * Der Wert steht in s_i2s_mode (Startwert = I2S_MODE aus CMake, im NVS
-     * gespeichert, zur Laufzeit ueber "i2smode" aenderbar).
-     *
-     * Zwei Regeln bestimmen die Ketten:
-     *  - Die Toninformation geht an das KOPF-Element und laeuft erst ab dem
-     *    NAECHSTEN weiter, sie bleibt beim ersten dependency-Element stehen
-     *    (esp_gmf_pipeline.c:202, 210-216). Das KOPF-Element muss die Meldung
-     *    deshalb SELBST annehmen koennen - es braucht einen
-     *    ops.event_receiver. Deshalb fuehren in Modus 1 und 3 die GMF-Wandler
-     *    an, die beide einen Empfaenger haben; in Modus 2 fuehrt
-     *    aud_lin_resample an (eigener Empfaenger, siehe linear_resample.c).
-     *  - Das LETZTE Element braucht einen freien Ausgang, weil der Aufbau den
-     *    Ausgang des vorletzten belegt und connect_pipe den Mischer an den
-     *    Ausgang des letzten haengt. Deshalb endet jede Kette mit einem
-     *    Kanalwandler (oder in Modus 2 mit dem Umsetzer).
-     */
-    if (s_i2s_mode == 0) {
-        ESP_LOGW(TAG, "I2S-Modus 0: der I2S-Zweig wird nicht angelegt (nur Datei-Zweig)");
-        i2s2bt_pipe = NULL;
-        /* Der Rest dieser Funktion gehoert nur zu den Faellen mit I2S-Zweig. */
-    } else {
-        const char *name[3] = {0};
-        size_t name_num = 0;
-
-        switch (s_i2s_mode) {
-        case 1:
-            /* Beide GMF-Wandler hintereinander (beide mit eigenem Empfaenger). */
-            name[0] = "aud_rate_cvt_i2s";
-            name[1] = "aud_bit_cvt_i2s";
-            name[2] = "aud_ch_cvt_i2s";
-            name_num = 3;
-            break;
-        case 3:
-            /*
-             * Erst 32->16 Bit (Bitshift), DANN Ratenwandlung.
-             *
-             * Der Bitshift ist praktisch gratis - das Vorgaengerprojekt macht genau das
-             * (output_samples[i] = (int16_t)(input_samples[i] >> 16),
-             * My_Audio_converter_32to16bit.c:60). Danach arbeitet die GMF-Ratenwandlung
-             * nur noch auf der HALBEN Datenmenge; sie war mit 27 % der groesste
-             * Einzelposten im System.
-             *
-             * Der Bit-Wandler hat einen eigenen Empfaenger (esp_gmf_bit_cvt.c:279),
-             * er darf deshalb am Kopf stehen.
-             */
-            name[0] = "aud_bit_cvt_i2s";
-            name[1] = "aud_rate_cvt_i2s";
-            name[2] = "aud_ch_cvt_i2s";
-            name_num = 3;
-            break;
-        case 4:
-            /*
-             * Fall 4 sollte einen EIGENEN Shifter vor die GMF-Ratenwandlung
-             * setzen (aud_shift16 -> aud_rate_cvt_i2s). Das Element ist auf
-             * Hardware abgestuerzt und in 0.9.14 entfernt worden; Fall 4 baut
-             * deshalb dieselbe Kette wie Fall 3.
-             *
-             * Gemessenes Verhalten (damals, mit aud_shift16):
-             *   SHIFT16: Toninformation: 60000 Hz, 32 Bit, 2 ch -> 60000 Hz, 16 Bit, 2 ch
-             *   E ESP_GMF_PORT: ACQ IN, there is no payload, el:...-aud_rate_cvt_i2s
-             *   Guru Meditation Error: Core 1 panic'ed (LoadProhibited)
-             *   esp_gmf_rate_cvt_process (esp_gmf_rate_cvt.c:104)
-             *
-             * Ursache - zwei Stellen, die zusammenkommen:
-             *  1. Der Eingangsport von aud_rate_cvt_i2s hatte keinen Payload
-             *     (esp_gmf_port.c:201-215: bei "nicht erstes Element" wird
-             *     port->payload gebraucht; fehlt er, bleibt *load NULL).
-             *     Das eigene Element reichte den Payload nicht so weiter, wie
-             *     GMF das erwartet - der GMF-Bitwandler in Fall 3 tut das.
-             *  2. GMF prueft das Ergebnis nicht: esp_gmf_rate_cvt.c:103 holt
-             *     den Eingang, Zeile 104 greift sofort auf in_load->valid_size
-             *     zu. NULL + LoadProhibited.
-             *
-             * Fall 3 macht genau dasselbe (32->16 Bit, dann Ratenwandlung) mit
-             * dem GMF-eigenen Bitwandler und laeuft. Er ist damit der
-             * belastbare Weg; ein eigener Shifter waere nur dann sinnvoll, wenn
-             * er die Port-Weitergabe exakt wie ein GMF-Element macht.
-             */
-            ESP_LOGW(TAG, "I2S-Modus 4 ist gesperrt (Absturz in aud_rate_cvt_i2s) - "
-                          "es wird Modus 3 gebaut: GMF-Bitwandler vor der Ratenwandlung");
-            name[0] = "aud_bit_cvt_i2s";
-            name[1] = "aud_rate_cvt_i2s";
-            name[2] = "aud_ch_cvt_i2s";
-            name_num = 3;
-            break;
-        default:
-            /*
-             * Messfall 2 (Vorgabe): eigener linearer Umsetzer, ein Durchgang.
-             *
-             * Er ist das EINZIGE Element - damit ist er Kopf (bekommt die
-             * Toninformation ueber seinen eigenen Empfaenger) und Ende (sein Ausgang
-             * ist frei fuer den Mischer) zugleich.
-             */
-            name[0] = "aud_lin_resample";
-            name_num = 1;
-            break;
-        }
+     * Es ist Kopf UND Ende zugleich: Kopf, weil die Toninformation beim ersten
+     * dependency-Element stehen bleibt (eigener event_receiver noetig); Ende,
+     * weil sein Ausgang fuer den Ringpuffer zum Mischer frei sein muss.
+     */    {
+        const char *name[1] = {"aud_lin_resample"};
+        size_t name_num = 1;
 
         esp_gmf_err_t ret = esp_gmf_pool_new_pipeline(pool, "io_i2s", name, name_num,
                                                       NULL, &i2s2bt_pipe);
@@ -1616,50 +1497,8 @@ static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
             return;
         }
         esp_gmf_pipeline_set_event(i2s2bt_pipe, local2bt_pipe_event_cb, NULL);
+        ESP_LOGI(TAG, "I2S-Zweig: 60000 Hz/32 Bit -> %d Hz/%d Bit", I2S2BT_RATE_HZ, I2S2BT_BITS);
 
-        if (s_i2s_mode != 2) {
-            /*
-             * Messfall 1, 3 und 4: GMF-Ratenwandlung ist beteiligt.
-             *
-             * In Fall 3 und 4 steht der Bit-Shift VOR der Ratenwandlung, damit die
-             * Ratenwandlung nur noch auf 16-Bit-Daten rechnet (halbe Datenmenge).
-             * In Fall 1 ist die Reihenfolge umgekehrt (rate -> bit).
-             */
-            esp_gmf_element_handle_t rate = NULL;
-            if (esp_gmf_pipeline_get_el_by_name(i2s2bt_pipe, "aud_rate_cvt_i2s", &rate) == ESP_GMF_ERR_OK && rate != NULL) {
-                esp_gmf_rate_cvt_set_dest_rate(rate, I2S2BT_RATE_HZ);
-                esp_ae_rate_cvt_cfg_t *rate_cfg = (esp_ae_rate_cvt_cfg_t *)OBJ_GET_CFG(rate);
-                if (rate_cfg != NULL) {
-                    /* 1 ist die schnellste Stufe (esp_ae_rate_cvt.h). */
-                    rate_cfg->complexity = 1;
-                }
-                if (s_i2s_mode == 4) {
-                    /* Modus 4 baut seit dem Absturz dieselbe Kette wie Modus 3. */
-                    ESP_LOGI(TAG, "I2S-Zweig (Shift GMF + GMF-Rate): 32->16 Bit, dann 60000 -> %d Hz, complexity 1",
-                             I2S2BT_RATE_HZ);
-                } else {
-                    ESP_LOGI(TAG, "I2S-Zweig (GMF): 60000 Hz -> %d Hz, complexity 1", I2S2BT_RATE_HZ);
-                }
-            } else {
-                ESP_LOGE(TAG, "aud_rate_cvt_i2s in der I2S-Pipeline nicht gefunden");
-            }
-            if (s_i2s_mode != 4) {
-                /* Den eigenen Shifter gibt es in Fall 4 - dort stellt er sich selbst ein. */
-                esp_gmf_element_handle_t bit = NULL;
-                if (esp_gmf_pipeline_get_el_by_name(i2s2bt_pipe, "aud_bit_cvt_i2s", &bit) == ESP_GMF_ERR_OK && bit != NULL) {
-                    esp_gmf_bit_cvt_set_dest_bits(bit, I2S2BT_BITS);
-                    ESP_LOGI(TAG, "I2S-Zweig: 32 -> %d Bit", I2S2BT_BITS);
-                } else {
-                    ESP_LOGE(TAG, "aud_bit_cvt_i2s in der I2S-Pipeline nicht gefunden");
-                }
-            }
-            esp_gmf_element_handle_t ch = NULL;
-            if (esp_gmf_pipeline_get_el_by_name(i2s2bt_pipe, "aud_ch_cvt_i2s", &ch) == ESP_GMF_ERR_OK && ch != NULL) {
-                esp_gmf_ch_cvt_set_dest_channel(ch, I2S2BT_CHANNELS);
-            }
-        } else {
-            ESP_LOGI(TAG, "I2S-Zweig (linear): 60000 Hz/32 Bit -> %d Hz/%d Bit", I2S2BT_RATE_HZ, I2S2BT_BITS);
-        }
 
         esp_gmf_task_cfg_t cfg = DEFAULT_ESP_GMF_TASK_CONFIG();
         cfg.thread.core = 1;
@@ -2098,46 +1937,15 @@ void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream)
 
     esp_gmf_err_t ret = ESP_GMF_ERR_OK;
 
-    if (s_i2s_mode == 0) {
-        /*
-         * Messfall 0: kein I2S-Zweig. Der Mischer bekommt nur den Datei-Zubringer;
-         * der fehlende Eingang wird mit Nullen aufgefuellt
-         * (esp_gmf_mixer.c:211-218). So laesst sich die MP3 allein messen.
-         */
-        ESP_LOGW(TAG, "I2S-Modus 0: nur der Datei-Zweig wird verbunden");
-        static bool file_only_connected = false;
-        if (!file_only_connected) {
-            ret = connect_branch_to_mixer(local2bt_pipe, "aud_lin_resample_file", &file_branch_db, FILE_DB_ITEMS);
-            if (ret != ESP_GMF_ERR_OK) {
-                ESP_LOGE(TAG, "Datei-Zweig liess sich nicht an den Mischer haengen: %d", ret);
-                return;
-            }
-            file_only_connected = true;
-            ESP_LOGI(TAG, "Datei-Zweig haengt am Mischer (I2S aus)");
-        }
-    } else {
-        if (i2s2bt_pipe == NULL) {
-            ESP_LOGE(TAG, "I2S-Pipeline nicht vorhanden (I2S_MODE=%d)", s_i2s_mode);
-            return;
-        }
+    if (i2s2bt_pipe == NULL) {
+        ESP_LOGE(TAG, "I2S-Pipeline nicht vorhanden");
+        return;
+    }
 
-        /*
-         * REIHENFOLGE IST ENTSCHEIDEND: erst verkabeln, dann das Format melden.
-         *
-         * Die Formatmeldung geht naemlich nicht direkt an den Mischer, sondern
-         * ueber den Event-Weiterleiter, der beim Verbinden entsteht
-         * (esp_gmf_pipeline_reg_event_recipient, esp_gmf_pipeline.c:228-232):
-         *
-         *   item = pipeline->evt_conveyor;  while (item) item->cb(evt, item->ctx)
-         *
-         * Der aud_mixer ist ein dependency-Element (esp_gmf_mixer.c:457) und
-         * kommt ausschliesslich ueber diese Meldung von STATE_NONE nach
-         * INITIALIZED (esp_gmf_mixer.c:299). Meldet man vorher, laeuft die
-         * Meldung ins Leere und das Registrieren der Jobs scheitert:
-         *
-         *   Element[aud_mixer-...] not ready to register job, ret:0xffffdff8
-         *   Run timeout,[mixer_task,...]
-         */
+    {
+        /* Erst verkabeln, dann das Format melden: die Meldung laeuft ueber den
+         * Event-Weiterleiter, der beim Verbinden entsteht; der aud_mixer kommt
+         * nur so nach INITIALIZED. */
         static bool branches_connected = false;
         if (!branches_connected) {
             /*
@@ -2146,8 +1954,7 @@ void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream)
              *   Modus 1/3/4 -> aud_ch_cvt_i2s
              * Siehe setup_pipeline_i2s2bt().
              */
-            const char *i2s_last_el = (s_i2s_mode == 2) ? "aud_lin_resample" : "aud_ch_cvt_i2s";
-            ret = connect_branch_to_mixer(i2s2bt_pipe, i2s_last_el, &i2s_branch_db, MIXER_DB_ITEMS);
+            ret = connect_branch_to_mixer(i2s2bt_pipe, "aud_lin_resample", &i2s_branch_db, MIXER_DB_ITEMS);
             if (ret != ESP_GMF_ERR_OK) {
                 ESP_LOGE(TAG, "I2S-Zweig liess sich nicht an den Mischer haengen: %d", ret);
                 return;
@@ -2356,12 +2163,8 @@ void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream)
      * ihn mit Nullen auf - die Vampire bleibt also zu hoeren.
      */
     ESP_LOGI(TAG, "Starte I2S-Zubringer, dann nach %d ms den Mischer", s_mixer_prefill_ms);
-    if (s_i2s_mode != 0) {
-        stream_proc_post_pipeline_action(i2s2bt_pipe, STREAM_PROC_PIPELINE_PREPARE);
-        stream_proc_post_pipeline_action(i2s2bt_pipe, STREAM_PROC_PIPELINE_RUN);
-    } else {
-        ESP_LOGW(TAG, "I2S-Modus 0: kein I2S-Zubringer zu starten");
-    }
+    stream_proc_post_pipeline_action(i2s2bt_pipe, STREAM_PROC_PIPELINE_PREPARE);
+    stream_proc_post_pipeline_action(i2s2bt_pipe, STREAM_PROC_PIPELINE_RUN);
     vTaskDelay(pdMS_TO_TICKS(s_mixer_prefill_ms));
 
     ESP_LOGI(TAG, "Starte Mischer");
@@ -2431,74 +2234,6 @@ void i2s2bt_log_io_speed(void)
              (unsigned long long)st.total_bytes, (unsigned long long)st.total_time_ms,
              (unsigned)st.average_speed_kbps, (unsigned)st.current_speed_kbps);
     ESP_LOGI(TAG, "   Sollwert 3840 kbit/s (60 kHz, 32 Bit, stereo)");
-}
-
-/*
- * Messfall umschalten.
- *
- * Der Zweig entsteht in stream_proc_init() - also VOR dem ersten Start. Ein
- * Wechsel wirkt deshalb erst nach einem Neustart; das steht auch im
- * CLI-Kommando. Der Wert wird bewusst NICHT gespeichert (kein NVS): nach einem
- * Neustart gilt wieder I2S_MODE aus dem Build, damit ein Testlauf nie
- * unbemerkt mit einem anderen Fall weiterlaeuft.
- */
-esp_err_t i2s2bt_set_mode(int mode)
-{
-    if (mode < 0 || mode > 4) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    s_i2s_mode = mode;
-
-    /*
-     * Sofort speichern: der Zweig wird beim NAECHSTEN Start gebaut, und ohne
-     * diese Zeile waere der Wert nach dem Neustart wieder der Build-Wert - die
-     * Umschaltung liefe ins Leere.
-     */
-    nvs_handle_t nvs = 0;
-    if (nvs_open(I2S_MODE_NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
-        esp_err_t err = nvs_set_i8(nvs, I2S_MODE_NVS_KEY, (int8_t)mode);
-        if (err == ESP_OK) {
-            err = nvs_commit(nvs);
-        }
-        nvs_close(nvs);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Modus %d konnte nicht gespeichert werden (%s) - gilt nur bis zum Neustart",
-                     mode, esp_err_to_name(err));
-        }
-    } else {
-        ESP_LOGW(TAG, "NVS nicht offen - Modus %d gilt nur bis zum Neustart", mode);
-    }
-    return ESP_OK;
-}
-
-int i2s2bt_get_mode(void)
-{
-    return s_i2s_mode;
-}
-
-/*
- * Beim Start: gespeicherten Modus uebernehmen.
- *
- * Wird aus stream_proc_init() aufgerufen, also NACH nvs_flash_init() in
- * app_main() - der NVS ist zu diesem Zeitpunkt bereits benutzbar.
- */
-static void i2s_mode_load_from_nvs(void)
-{
-    nvs_handle_t nvs = 0;
-    if (nvs_open(I2S_MODE_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
-        ESP_LOGI(TAG, "Kein gespeicherter I2S-Modus - es gilt der Build-Wert %d", I2S_MODE);
-        return;
-    }
-    int8_t stored = -1;
-    esp_err_t err = nvs_get_i8(nvs, I2S_MODE_NVS_KEY, &stored);
-    nvs_close(nvs);
-
-    if (err == ESP_OK && stored >= 0 && stored <= 4) {
-        s_i2s_mode = stored;
-        ESP_LOGI(TAG, "I2S-Modus %d aus dem NVS uebernommen (Build-Wert war %d)", stored, I2S_MODE);
-    } else {
-        ESP_LOGI(TAG, "NVS hat keinen gueltigen I2S-Modus - es gilt der Build-Wert %d", I2S_MODE);
-    }
 }
 
 void i2s2bt_set_mixer_wait(int prefill_ms, int transit_ms)
@@ -2994,28 +2729,9 @@ static void log_buffer_sizes(void)
 
 void stream_proc_init(esp_gmf_pool_handle_t pool)
 {
-    /*
-     * ZUERST den Messfall festlegen - setup_pipeline_i2s2bt() baut die Kette
-     * danach. Der Wert kommt aus dem NVS, damit er einen Neustart uebersteht
-     * (siehe i2s_mode_load_from_nvs).
-     */
-    i2s_mode_load_from_nvs();
-
-    /*
-     * Der Datei-Zweig ist fuer den Mischer wieder noetig: der I2S-Zubringer
-     * laeuft immer, der Datei-Zubringer kommt beim Abspielen dazu. Der
-     * Diagnose-Schalter I2S_ONLY_TEST bleibt fuer Fehlersuche erhalten.
-     */
-#if I2S_ONLY_TEST
-    ESP_LOGW(TAG, "I2S-ONLY-Test: Datei-Zweig wird nicht angelegt");
-#else
-#if !POOL_SMALL
-    /* Nur fuer den Board-Manager-Zweig (Codec) - hier ungenutzt, siehe oben. */
-    setup_pipeline_bt2codec(pool);
-    setup_pipeline_codec2bt(pool);
-#endif
+    /* Datei-Zubringer, I2S-Zweig und Mischer aufbauen; der Datei-Zubringer
+     * kommt beim Abspielen an den Mischer, der I2S-Zubringer laeuft immer. */
     setup_pipeline_local2bt(pool);
-#endif
     setup_pipeline_i2s2bt(pool);
     setup_pipeline_mixer(pool);
     setup_stream_proc_task();

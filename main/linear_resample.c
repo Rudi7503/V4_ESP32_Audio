@@ -43,7 +43,6 @@
 #include "esp_gmf_oal_mem.h"
 #include "esp_gmf_port.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 
 /* Eigener Header: liefert aud_lin_resample_cfg_t und die oeffentlichen
  * Funktionen. Er MUSS eingebunden sein, sonst kennt die Datei ihren eigenen
@@ -123,17 +122,7 @@ typedef struct {
     uint8_t in_channels;
     uint32_t in_rate;                   /* Eingangsrate der Quelle */
     bool in_rate_from_source;           /* true = aus der Toninformation */
-    /* Diagnose */
-    uint32_t blocks;
-    int32_t peak_seen;
-    int64_t sum_in;
-    /* Diagnose 0.9.33: Selbsttest bei 1:1 und Klicksuche */
-    uint32_t selftest_fehler;
-    /* Diagnose 0.9.36: tatsaechlicher Durchsatz */
-    int64_t  t_start_us;
-    uint64_t bytes_out;
-    int16_t letzter_wert;
-    bool habe_letzten;
+
 } lin_resample_t;
 
 /*
@@ -281,19 +270,7 @@ static esp_gmf_job_err_t lin_resample_open(esp_gmf_element_handle_t self, void *
     res->input_pos_fixed = 0;
     res->last_sample_cache[0] = 0;
     res->last_sample_cache[1] = 0;
-    /*
-     * Blockzaehler je Datei zuruecksetzen (0.9.33).
-     *
-     * Vorher lief er ueber alle Dateien weiter. Die Diagnosezeilen kommen nur
-     * bei Block <= 3 oder bei jedem 2000sten - dadurch war ab der zweiten
-     * Datei NICHTS mehr zu sehen, und genau da trat der Fehler auf.
-     */
-    res->blocks = 0;
-    res->selftest_fehler = 0;
-    res->t_start_us = esp_timer_get_time();
-    res->bytes_out = 0;
-    res->letzter_wert = 0;
-    res->habe_letzten = false;
+
     if (res->ratio_fixed <= 0) {
         /* Kann bei vernuenftigen Raten nicht passieren - aber eine Division
          * durch 0 in process() waere ein Absturz. */
@@ -428,8 +405,6 @@ static esp_gmf_job_err_t lin_resample_process(esp_gmf_element_handle_t self, voi
     }
 
     int32_t pos = res->input_pos_fixed;
-    /* Fuer den Selbsttest: kam der erste Ausgangswert aus dem Uebergangsspeicher? */
-    int pos_anfang = pos;
 
     while (((pos >> Q_SHIFT) < in_frames) && ((out_index / out_ch) < out_cap_frames)) {
         int idx_a = pos >> Q_SHIFT;
@@ -503,124 +478,6 @@ static esp_gmf_job_err_t lin_resample_process(esp_gmf_element_handle_t self, voi
     out_load->is_done = in_load->is_done;
     if (in_load->is_done) {
         out_len = ESP_GMF_JOB_ERR_DONE;
-    }
-
-    /*
-     * Diagnose: Vor dem Umbau war die Vampire zu hoeren, danach nicht mehr.
-     * Deshalb hier die echten Werte zeigen - Eingangs- und Ausgangs-Pegel sowie
-     * die ersten Samples. Damit ist sofort zu sehen, ob still Null
-     * hineinkommt (dann liegt es am Lesen der 32 Bit) oder ob der Ausgang
-     * leer bleibt (dann liegt es an der Rechnung).
-     */
-    res->blocks++;
-    res->bytes_out += (uint64_t)out_index * sizeof(int16_t);
-    /*
-     * Durchsatz messen (0.9.36).
-     *
-     * Der Datei-Zweig MUSS 192000 Byte/s liefern (48000 Frames * 2 Kanaele *
-     * 2 Byte). Liefert er weniger, laeuft der Ringpuffer leer, und der Mischer
-     * fuellt die fehlenden Bytes mit Nullen - hoerbar als Stottern. Genau das
-     * ist zu pruefen: steht hier weniger als 192000, ist der Zubringer der
-     * Engpass (nicht der Mischer).
-     */
-    if ((res->blocks % 1000) == 0) {
-        int64_t dt_us = esp_timer_get_time() - res->t_start_us;
-        if (dt_us > 0) {
-            uint32_t byte_s = (uint32_t)((res->bytes_out * 1000000ULL) / (uint64_t)dt_us);
-            ESP_LOGI(TAG, "%s: %u Bloecke, %llu Byte in %lld ms -> %u Byte/s (Soll 192000 bei 48 kHz stereo)",
-                     OBJ_GET_TAG(self), (unsigned)res->blocks, (unsigned long long)res->bytes_out,
-                     (long long)(dt_us / 1000), (unsigned)byte_s);
-        }
-    }
-    int32_t peak_in = 0;
-    for (int i = 0; i < in_frames * ch; i++) {
-        int32_t v = lin_read_sample(in_buf, res->in_bits, i);
-        if (v < 0) {
-            v = -v;
-        }
-        if (v > peak_in) {
-            peak_in = v;
-        }
-    }
-    if (peak_in > res->peak_seen) {
-        res->peak_seen = peak_in;
-    }
-    res->sum_in += peak_in;
-    /*
-     * Nur alle 2000 Bloecke eine Zeile. Das sind bei 96 Frames je Block und
-     * 60 kHz rund 3,2 s - haeufiger macht das Log unlesbar und kostet
-     * UART-Zeit. Die ersten drei Bloecke kommen immer, damit ein fehlender
-     * Ton sofort auffaellt.
-     */
-    /*
-     * KLICKSUCHE (0.9.33).
-     *
-     * Bei einem 440-Hz-Sinus bei 48 kHz springt der Wert von Sample zu Sample
-     * hoechstens um 2*pi*440/48000*16383 = rund 943. Ein groesserer Sprung
-     * zwischen dem letzten Sample des vorigen Blocks und dem ersten dieses
-     * Blocks ist ein Loch oder eine Dopplung - genau das hoert man als
-     * "verzerrt".
-     */
-    if (in_frames > 0 && res->in_bits == 16) {
-        int16_t erster = (int16_t)lin_read_sample(in_buf, res->in_bits, 0);
-        if (res->habe_letzten) {
-            int sprung = (int)erster - (int)res->letzter_wert;
-            if (sprung < 0) {
-                sprung = -sprung;
-            }
-            if (sprung > 3000) {
-                ESP_LOGW(TAG, "Sprung am Blockanfang: Block %u, %d -> %d (Abstand %d)",
-                         (unsigned)res->blocks + 1, (int)res->letzter_wert, (int)erster, sprung);
-            }
-        }
-        int letzte_idx = (in_frames - 1) * ch;      /* Kanal 0 des letzten Frames */
-        res->letzter_wert = (int16_t)lin_read_sample(in_buf, res->in_bits, letzte_idx);
-        res->habe_letzten = true;
-    }
-
-    /*
-     * SELBSTTEST bei 1:1 (0.9.33).
-     *
-     * Bei gleicher Ein- und Ausgangsrate ist das Element eine reine
-     * Kanalwandlung (Mono -> beide Kanaele). Der Ausgang muss dann Sample fuer
-     * Sample dem Eingang entsprechen. Jede Abweichung ist ein Fehler in dieser
-     * Funktion - und nicht im Decoder oder im Mischer.
-     */
-    if (res->in_bits == 16 && res->ratio_fixed == Q_ONE) {
-        /*
-         * Der erste Ausgangsframe eines Blocks kann aus dem
-         * Uebergangsspeicher stammen (Restposition -1). Dann sind Ausgang und
-         * Eingang um ein Frame verschoben - das muss der Vergleich
-         * beruecksichtigen, sonst meldet er 256 "Fehler", die keine sind.
-         */
-        int versatz = (pos_anfang < 0) ? 1 : 0;
-        int geprueft = out_index / out_ch - versatz;
-        if (geprueft > in_frames - versatz) {
-            geprueft = in_frames - versatz;
-        }
-        for (int i = 0; i < geprueft; i++) {
-            int16_t soll = (int16_t)lin_read_sample(in_buf, res->in_bits, i * ch);
-            if (out_samples[(i + versatz) * out_ch] != soll) {
-                res->selftest_fehler++;
-            }
-        }
-        if (res->blocks <= 3 && res->selftest_fehler) {
-            ESP_LOGE(TAG, "1:1-Selbsttest: %u Abweichungen (Block %u, Versatz %d)",
-                     (unsigned)res->selftest_fehler, (unsigned)res->blocks, versatz);
-        }
-    }
-
-    if (res->blocks <= 3 || (res->blocks % 2000) == 0) {
-        ESP_LOGI(TAG, "%s: Block %d: in_frames=%d (ch=%d) peak_in=%d (max bisher %d), out_samples=%d, uebrig=%d, "
-                      "in[0]=%d in[1]=%d%s",
-                 OBJ_GET_TAG(self), (int)res->blocks, in_frames, ch, (int)peak_in, (int)res->peak_seen, out_index,
-                 (int)((pos - block_len_fixed) >> Q_SHIFT),
-                 (int)lin_read_sample(in_buf, res->in_bits, 0), (int)lin_read_sample(in_buf, res->in_bits, 1),
-                 (out_index >= 2) ? "" : " (Ausgang leer!)");
-        if (out_index >= 2) {
-            ESP_LOGI(TAG, "  raus[0]=%d raus[1]=%d (Selbsttestfehler bisher %u)",
-                     (int)out_samples[0], (int)out_samples[1], (unsigned)res->selftest_fehler);
-        }
     }
 
 __release:
