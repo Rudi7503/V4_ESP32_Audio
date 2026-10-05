@@ -20,8 +20,8 @@
 
 #define SD_MOUNT_POINT         "/sdcard"
 #define SD_MAX_FILE_HANDLES    5
-#define SD_MAX_FREQ_KHZ        20000
-#define SD_SPI_MAX_FREQ_KHZ    10000
+#define SD_MAX_FREQ_KHZ        4000
+#define SD_SPI_MAX_FREQ_KHZ    1000
 #define SD_MOUNT_ATTEMPTS      3
 #define SD_RETRY_DELAY_MS      200
 
@@ -106,6 +106,25 @@ bool sd_card_is_present(void)
 }
 
 /*
+ * STAND 0.9.46 (gemessen, siehe docs/MESSRIEHE.md Abschnitt 12):
+ *
+ * Der weiter unten beschriebene Flash-Takt war nur EIN Faktor. Mit Flash
+ * 40 MHz (im Image und zur Laufzeit verifiziert) mountet der WROVER-KIT
+ * dieselbe Karte mit DEMSELBEN Build in 103 ms:
+ *
+ *   I (1125) SD_CARD: mounted at /sdcard (SDMMC 1 Bit)
+ *
+ * Der WROOM faellt weiter aus - und zwar schon im ersten CIU-Clock-Update,
+ * bevor ein Bit zur Karte geht:
+ *
+ *   E sd_host_slot_clock_update_command(993): sd_host_start_command returned 0x107
+ *
+ * Das passiert mit Karte, ohne Karte, mit abgeklemmtem SD-Breakout, bei 4 MHz
+ * und bei 20 MHz SD-Takt. Damit sind Karte, Halter, Verkabelung, SD-Takt und
+ * Flash-Takt als Ursache widerlegt; die Firmware ebenfalls (der WROVER laeuft).
+ * Offen ist ein modul-/platinenspezifischer Rest; Pruefpunkte und die
+ * Registerdiagnose ("sdreg") stehen in Abschnitt 12a-12f der Messreihe.
+ *
  * Weg 1: SDMMC (1 Bit) - der schnelle, native Weg.
  *
  * FEHLERBILD, das uns lange beschaeftigt hat:
@@ -141,8 +160,77 @@ bool sd_card_is_present(void)
  * PSRAM-Build. Nach dem Flashen eines No-PSRAM-Builds auf DASSELBE Modul
  * scheiterte die SD dort genauso.
  */
+/*
+ * DAT3 (Kartenkontakt 2, bei uns GPIO13) MUSS waehrend der Initialisierung HIGH
+ * sein. Ueber diese Leitung entscheidet die Karte, in welchem Modus sie
+ * arbeitet: sieht sie CS/DAT3 beim CMD0 LOW, schaltet sie in den SPI-Modus und
+ * haelt danach DAT0 (dort DO) als Busy-Signal auf LOW.
+ *
+ * Genau das ist am 04.10. gemessen worden: der SDMMC-Host verweigert jedes
+ * Kommando, solange die Karte DAT0 auf LOW haelt - im Registerverlauf
+ * (docs/MESSRIEHE.md, Abschnitt 12k) steht direkt vor dem Timeout
+ * `status=0x00000306`, also data_busy = 1, und `start_command = 1`.
+ *
+ * Unser Aufbau nutzt im 1-Bit-Modus nur CLK/CMD/D0; GPIO13 bleibt frei, und
+ * IDF konfiguriert D1..D3 erst ab 4 Bit Breite
+ * (esp_driver_sdmmc/src/sd_host_sdmmc.c:1376-1385, dort steht ausdruecklich
+ * "Force D3 high to make slave enter SD mode"). Also machen wir es hier selbst.
+ *
+ * Achtung: der SPI-Weg benutzt GPIO13 als CS - dort darf der Pin nicht fest
+ * auf HIGH liegen, deshalb wird er nur vor dem SDMMC-Versuch gesetzt.
+ */
+static void sd_dat3_high(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << SD_PIN_CS,      /* GPIO13 = DAT3 am Kartenslot */
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    gpio_set_level(SD_PIN_CS, 1);
+}
+
+/*
+ * DAT1/DAT2/DAT3 (GPIO4/12/13) nach dem Boot auf HIGH ziehen.
+ *
+ * WOZU: Laut ESP-IDF-Doku "SD Pullup Requirements" muessen auch im 1-Bit-Modus
+ * ALLE Datenleitungen hochgezogen sein (CMD und D0-D3, je 50k). GPIO12 ist aber
+ * gleichzeitig MTDI und legt beim Reset die Flash-Spannung VDD_SDIO fest:
+ *
+ *   WROOM-32 (3,3 V Flash): GPIO12 muss beim Reset LOW sein (interner Pulldown)
+ *   WROVER   (1,8 V Flash): GPIO12 muss beim Reset HIGH sein (interner Pullup)
+ *
+ * Die Doku nennt das ausdruecklich "incompatible with SD card operation". Der
+ * interne Pull-up wirkt erst NACH dem Boot und stoert das Strapping deshalb
+ * nicht - das ist der in der Doku fuer den ESP32 als Host empfohlene Weg:
+ *
+ *   "In the case using ESP32 host only, external pullup can be omitted and an
+ *    internal pullup can be enabled using a gpio_pullup_en(GPIO_NUM_12); call.
+ *    Most SD cards work fine when an internal pullup on GPIO12 line is enabled."
+ *
+ * gpio_set_pull_mode(..., GPIO_PULLUP_ONLY) schaltet den internen Pulldown mit
+ * ab - sonst kaempfen beide internen Widerstaende gegeneinander.
+ *
+ * Grenze: der interne Pull-up ist schwach (ca. 45k). Zieht die Platine DAT2
+ * stark herunter, kommt er nicht an - dann muss DAT2 getrennt werden (im
+ * 1-Bit-Modus wird es nicht gebraucht).
+ */
+static void sd_dat_pullups(void)
+{
+    gpio_set_pull_mode(GPIO_NUM_4,  GPIO_PULLUP_ONLY);   /* DAT1 */
+    gpio_set_pull_mode(GPIO_NUM_12, GPIO_PULLUP_ONLY);   /* DAT2 = MTDI */
+    gpio_set_pull_mode(GPIO_NUM_13, GPIO_PULLUP_ONLY);   /* DAT3 */
+}
+
 static esp_err_t sd_mount_try_sdmmc(void)
 {
+    /* DAT3/CS HIGH, damit die Karte im SD-Modus bleibt und nicht auf SPI
+     * umschaltet, und die Datenleitungen hochziehen (siehe oben). */
+    sd_dat3_high();
+    sd_dat_pullups();
+
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.max_freq_khz = SD_MAX_FREQ_KHZ;
 
@@ -252,7 +340,7 @@ esp_err_t sd_card_mount(void)
 
     esp_err_t err = ESP_FAIL;
     for (int attempt = 1; attempt <= SD_MOUNT_ATTEMPTS; attempt++) {
-        ESP_LOGI(TAG, "SDMMC-Versuch %d/%d", attempt, SD_MOUNT_ATTEMPTS);
+        ESP_LOGI(TAG, "SDMMC-Versuch %d/%d (max %d kHz)", attempt, SD_MOUNT_ATTEMPTS, SD_MAX_FREQ_KHZ);
         err = sd_mount_try_sdmmc();
         if (err == ESP_OK) {
             s_over_spi = false;

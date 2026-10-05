@@ -20,7 +20,24 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
+#include "esp_rom_sys.h"
+#include "esp_clk_tree.h"
+#include "esp_private/esp_clk.h"
+#include "soc/clk_tree_defs.h"
+#include "driver/gpio.h"
+#include "driver/sdmmc_host.h"
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
+#include "soc/soc.h"
+#include "soc/dport_access.h"
+#include "soc/sdmmc_pins.h"
+#include "soc/gpio_reg.h"
 #include "soc/spi_struct.h"
+#include "soc/sdmmc_struct.h"
+#include "soc/dport_reg.h"
 
 #include "version.h"
 
@@ -1010,6 +1027,319 @@ static int cmd_sd_ls(int argc, char **argv)
 }
 
 /*
+ * sd_mount_spi [clk mosi miso cs] - Karte ueber SPI auf BELIEBIGEN Pins.
+ *
+ * WOZU: Der SDMMC-Host des ESP32 hat keine GPIO-Matrix
+ * (SDMMC_LL_SLOT_SUPPORT_GPIO_MATRIX = 0, esp_hal_sd/esp32/include/hal/sdmmc_ll.h:86),
+ * seine Pins sind bei Slot 1 fest 14/15/2 (D1..D3 = 4/12/13) und Slot 0 sind
+ * die Flash-Pins. Fuer SDMMC gibt es also keine Alternative.
+ *
+ * Der SPI-Weg laeuft dagegen ueber die GPIO-Matrix und darf jede Leitung
+ * benutzen. Auf dem WROOM faellt er mit "send_if_cond (1) returned 0x108" aus
+ * (CMD8 ohne Antwort), obwohl er den SDMMC-Block ueberhaupt nicht benutzt.
+ * Mit diesem Kommando laesst sich die Karte an ANDEREN Pins anschliessen -
+ * damit ist trennbar:
+ *   - antwortet sie dort  -> die Pins 14/15/2/13 dieses Moduls sind die Ursache
+ *   - antwortet sie auch dort nicht -> Karteninterface/Halter/Karte
+ *
+ * Aufruf ohne Argumente benutzt die Standardbelegung (14/15/2/13).
+ */
+static int cmd_sd_mount_spi(int argc, char **argv)
+{
+    int clk = 14, mosi = 15, miso = 2, cs = 13;
+
+    if (argc == 5) {
+        clk  = atoi(argv[1]);
+        mosi = atoi(argv[2]);
+        miso = atoi(argv[3]);
+        cs   = atoi(argv[4]);
+    } else if (argc != 1) {
+        printf("Aufruf: sd_mount_spi [clk mosi miso cs]  (GPIO-Nummern)\n");
+        return 1;
+    }
+
+    if (sd_card_is_mounted()) {
+        printf("Es ist schon eine Karte gemountet - erst sd_unmount.\n");
+        return 1;
+    }
+
+    printf("SPI-Mount: CLK=GPIO%d MOSI=GPIO%d MISO=GPIO%d CS=GPIO%d\n", clk, mosi, miso, cs);
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI2_HOST;
+    host.max_freq_khz = 1000;
+    host.unaligned_multi_block_rw_max_chunk_size = 8;
+
+    spi_bus_config_t bus = {
+        .mosi_io_num = mosi,
+        .miso_io_num = miso,
+        .sclk_io_num = clk,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4000,
+    };
+    esp_err_t err = spi_bus_initialize(SPI2_HOST, &bus, SDSPI_DEFAULT_DMA);
+    if (err != ESP_OK) {
+        printf("spi_bus_initialize: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot.host_id = SPI2_HOST;
+    slot.gpio_cs = cs;
+    slot.gpio_cd = SDSPI_SLOT_NO_CD;    /* GPIO34 ohne externen Pull-up ist wertlos */
+    slot.gpio_wp = SDSPI_SLOT_NO_WP;
+
+    esp_vfs_fat_mount_config_t mcfg = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024,
+    };
+
+    sdmmc_card_t *card = NULL;
+    err = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot, &mcfg, &card);
+    if (err != ESP_OK) {
+        printf("Mount ueber SPI fehlgeschlagen: %s\n", esp_err_to_name(err));
+        spi_bus_free(SPI2_HOST);
+        return 1;
+    }
+
+    printf("Ueber SPI gemountet auf /sdcard\n");
+    sdmmc_card_print_info(stdout, card);
+    return 0;
+}
+
+/*
+ * sdpins - die drei SDMMC-Leitungen als normale GPIOs treiben und zuruecklesen.
+ *
+ * WOZU: Der SDMMC-Host des ESP32 hat keine GPIO-Matrix, seine Pins sind im
+ * 1-Bit-Modus fest 14/15/2 (esp_hal_sd/esp32/include/soc/sdmmc_pins.h). Ein
+ * Kurzschluss oder eine starke Last auf einer dieser Leitungen ist mit dem
+ * Treiber nicht zu sehen - als GPIO sofort: der Ruecklesewert muss dem
+ * getriebenen Pegel folgen.
+ *
+ * Erwartung bei intakter Leitung (die Eingaenge der Karte sind hochohmig, ihre
+ * Pull-ups sind schwach):
+ *     low  -> liest 0
+ *     high -> liest 1
+ * Folgt der Wert nicht, haelt etwas die Leitung fest oder sie ist gegen GND
+ * bzw. 3,3 V kurzgeschlossen.
+ *
+ * Hintergrund: Im Registerverlauf (Abschnitt 12k/12m der Messreihe) geht die
+ * Karte auf busy (DAT0 = LOW) und der Host sendet deshalb kein Kommando mehr -
+ * genau das Bild einer festgehaltenen DAT0-Leitung.
+ */
+static int cmd_sdpins(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    static const int pins[3] = { SDMMC_SLOT1_IOMUX_PIN_NUM_CLK,   /* 14 */
+                                 SDMMC_SLOT1_IOMUX_PIN_NUM_CMD,   /* 15 */
+                                 SDMMC_SLOT1_IOMUX_PIN_NUM_D0 };  /*  2 */
+    static const char *namen[3] = { "CLK", "CMD", "D0 " };
+
+    printf("SDMMC-Leitungen als GPIO (14=CLK, 15=CMD, 2=D0):\n");
+
+    /* Erst als Eingang lesen - zeigt, was die Leitung gerade macht. */
+    for (int i = 0; i < 3; i++) {
+        gpio_config_t in = {
+            .pin_bit_mask = 1ULL << pins[i],
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&in);
+        printf("  GPIO%-2d %s als Eingang: %d\n", pins[i], namen[i], gpio_get_level(pins[i]));
+    }
+
+    /* Dann treiben und zuruecklesen. */
+    int fehler = 0;
+    for (int i = 0; i < 3; i++) {
+        gpio_config_t out = {
+            .pin_bit_mask = 1ULL << pins[i],
+            .mode = GPIO_MODE_INPUT_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&out);
+
+        gpio_set_level(pins[i], 0);
+        esp_rom_delay_us(10);
+        int r_low = gpio_get_level(pins[i]);
+        gpio_set_level(pins[i], 1);
+        esp_rom_delay_us(10);
+        int r_high = gpio_get_level(pins[i]);
+
+        bool ok = (r_low == 0) && (r_high == 1);
+        if (!ok) {
+            fehler++;
+        }
+        printf("  GPIO%-2d %s: low -> liest %d, high -> liest %d   %s\n",
+               pins[i], namen[i], r_low, r_high,
+               ok ? "folgt (Leitung in Ordnung)"
+                  : "FOLGT NICHT - Leitung festgehalten oder kurzgeschlossen");
+    }
+
+    /* Pins wieder freigeben (der SDMMC-Treiber richtet sie selbst ein). */
+    for (int i = 0; i < 3; i++) {
+        gpio_config_t frei = {
+            .pin_bit_mask = 1ULL << pins[i],
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&frei);
+    }
+
+    printf("Ergebnis: %d von 3 Leitungen in Ordnung\n", 3 - fehler);
+
+    /*
+     * DAT1/DAT2/DAT3 mit und ohne internen Pull-up lesen.
+     *
+     * WOZU: DAT2 ist beim ESP32 gleichzeitig MTDI und legt beim Reset die
+     * Flash-Spannung fest (ESP-IDF "SD Pullup Requirements": WROOM-32 = 3,3 V
+     * Flash -> GPIO12 LOW, WROVER = 1,8 V Flash -> GPIO12 HIGH; "incompatible
+     * with SD card operation"). Wohin die PLATINE diese Leitung zieht, sieht
+     * man hier: bleibt der Pegel trotz Pull-up (oder Pull-down) gleich, zieht
+     * ein externer Widerstaerker staerker als die internen ca. 45k.
+     */
+    printf("Alle SD-Leitungen: frei / mit internem Pull-up / mit internem Pull-down\n");
+    printf("  (bleibt der Pegel trotz Pull-up auf 0, zieht die Platine oder das Modul");
+    printf(" staerker als die internen ca. 45k)\n");
+    static const int dat[6] = { 2, 14, 15, 4, 12, 13 };
+    static const char *datname[6] = { "D0 ", "CLK", "CMD", "DAT1", "DAT2", "DAT3" };
+    for (int i = 0; i < 6; i++) {
+        gpio_config_t in = {
+            .pin_bit_mask = 1ULL << dat[i],
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&in);
+        gpio_set_pull_mode(dat[i], GPIO_FLOATING);
+        esp_rom_delay_us(50);
+        int frei = gpio_get_level(dat[i]);
+
+        gpio_set_pull_mode(dat[i], GPIO_PULLUP_ONLY);
+        esp_rom_delay_us(50);
+        int mit_pu = gpio_get_level(dat[i]);
+
+        gpio_set_pull_mode(dat[i], GPIO_PULLDOWN_ONLY);
+        esp_rom_delay_us(50);
+        int mit_pd = gpio_get_level(dat[i]);
+
+        printf("  GPIO%-2d %s: frei=%d, mit Pull-up=%d, mit Pull-down=%d  -> %s\n",
+               dat[i], datname[i], frei, mit_pu, mit_pd,
+               (frei == 1 && mit_pd == 1) ? "extern auf HIGH gezogen (stark)"
+               : (frei == 0 && mit_pu == 0) ? "extern auf LOW gezogen (staerker als 45k)"
+               : (mit_pu == 1 && mit_pd == 0) ? "folgt den internen Pulls (extern nichts)"
+               : "undefiniert/hochohmig");
+        gpio_set_pull_mode(dat[i], GPIO_FLOATING);
+    }
+    return fehler ? 1 : 0;
+}
+
+/*
+ * scanpins - Pegel ALLER GPIOs direkt aus dem Eingangsregister lesen.
+ *
+ * WOZU: Damit laesst sich feststellen, welche Leitung der USB-Seriell-
+ * Schnittstelle (DTR, RTS, TXD) auf welchen ESP32-Pin geht. Der Host setzt
+ * dazu eine Leitung um, ruft scanpins auf und vergleicht: ein GPIO, dessen
+ * Pegel mitgeht, ist mit dieser Leitung verbunden.
+ *
+ * WICHTIG - warum ueber die Register und nicht ueber gpio_config():
+ * `gpio_config()` verweigert Pins, die ein Peripherietreiber beansprucht hat
+ * (ESP_ERR_INVALID_STATE). Im ersten Versuch fehlten dadurch ausgerechnet
+ * GPIO0, GPIO2, GPIO4 und GPIO5 - also genau die Pins, die DTR (GPIO0) und die
+ * SD/I2S-Leitungen betreffen. Das direkte Lesen von GPIO_IN_REG/GPIO_IN1_REG
+ * aendert dagegen nichts an der Konfiguration und liefert alle 40 Pins.
+ *
+ * Ausgabe: eine Zeile mit Hexmasken und eine Liste der acht wichtigsten Pins.
+ */
+static int cmd_scanpins(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    uint32_t in0 = REG_READ(GPIO_IN_REG);       /* GPIO0..31  */
+    uint32_t in1 = REG_READ(GPIO_IN1_REG);      /* GPIO32..39 */
+
+    printf("GPIO_IN=0x%08" PRIx32 " GPIO_IN1=0x%08" PRIx32 "\n", in0, in1);
+
+    printf("Wichtige Pins:");
+    static const int wichtig[] = { 0, 2, 4, 5, 12, 13, 14, 15 };
+    for (unsigned i = 0; i < sizeof(wichtig) / sizeof(wichtig[0]); i++) {
+        int g = wichtig[i];
+        int pegel = (g < 32) ? (int)((in0 >> g) & 1) : (int)((in1 >> (g - 32)) & 1);
+        printf(" %d=%d", g, pegel);
+    }
+    printf("\n");
+    return 0;
+}
+
+/*
+ * eq - Equalizer hinter dem Mischer bedienen (0.9.56).
+ *
+ * Aufrufe:
+ *   eq                      -> Baender auflisten
+ *   eq bands <0..10>        -> erste N Baender aktiv, Rest aus (0 = Durchlauf)
+ *   eq set <idx> <typ> <fc> <q> <gain>
+ *                           typ: 1=HighPass 2=LowPass 3=Peak 4=HighShelf 5=LowShelf
+ *
+ * Wozu die Bandzahl schaltbar ist: die CPU-Last haengt direkt an der Zahl der
+ * Baender (Doku-Formel: (rate/8000) * kanaele * baender * base_load). Damit
+ * laesst sich der echte Preis je Band auf diesem Chip messen, statt ihn aus
+ * den ESP32-S3-Werten hochzurechnen.
+ */
+static int cmd_eq(int argc, char **argv)
+{
+    if (argc == 1) {
+        printf("Equalizer hinter dem Mischer (max %d Baender):\n", MIXER_EQ_BANDS);
+        stream_proc_eq_list();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "bands") == 0) {
+        if (argc != 3) {
+            printf("Aufruf: eq bands <0..%d>\n", MIXER_EQ_BANDS);
+            return 1;
+        }
+        int n = atoi(argv[2]);
+        if (stream_proc_eq_set_bands(n) < 0) {
+            printf("Bandzahl konnte nicht gesetzt werden\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[1], "set") == 0) {
+        if (argc != 7) {
+            printf("Aufruf: eq set <idx> <typ> <fc> <q> <gain>\n");
+            printf("        typ: 1=HighPass 2=LowPass 3=Peak 4=HighShelf 5=LowShelf\n");
+            return 1;
+        }
+        int idx = atoi(argv[2]);
+        int typ = atoi(argv[3]);
+        unsigned fc = (unsigned)strtoul(argv[4], NULL, 10);
+        float q = strtof(argv[5], NULL);
+        float gain = strtof(argv[6], NULL);
+        if (stream_proc_eq_set(idx, typ, fc, q, gain) < 0) {
+            printf("Band konnte nicht gesetzt werden\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    printf("Unbekannt. Aufrufe: eq | eq bands <n> | eq set <idx> <typ> <fc> <q> <gain>\n");
+    return 1;
+}
+
+/*
  * 'version' - welcher Stand laeuft gerade?
  *
  * Die Nummer steht in version.txt und wird bei jeder Aenderung hochgezaehlt.
@@ -1040,6 +1370,415 @@ static int flash_clock_mhz(uint32_t clock_val)
         return 0;
     }
     return (int)(80u / clkdiv);
+}
+
+/*
+ * sdreg - Registerdiagnose des SDMMC-Hosts.
+ *
+ * WOZU: Auf dem WROOM faellt der SDMMC-Weg schon im Clock-Update der CIU in
+ * den Timeout - mit Karte, ohne Karte und mit abgeklemmtem SD-Modul identisch
+ * (docs/MESSREIHE.md, Abschnitt 6):
+ *
+ *   E (2015) SD_HOST: sd_host_slot_clock_update_command(993): sd_host_start_command returned 0x107
+ *
+ * Der Treiber wartet an dieser Stelle darauf, dass die HARDWARE das Bit
+ * SDMMC.cmd.start_command selbst wieder loescht
+ * (esp_hal_sd/esp32/include/hal/sdmmc_ll.h:584-587, is_command_taken).
+ * Bleibt es stehen, ist die CIU nie zum Zug gekommen - noch bevor ein Bit zur
+ * Karte geht. Das ist keine Karten-, Halter- oder Verdrahtungsfrage.
+ *
+ * Dieses Kommando zeigt ohne Treiber, was der Block wirklich tut:
+ *
+ *   1. Ist das Bus-Takt-Gate des SDIO-Hosts offen? Auf dem ESP32 haengt der
+ *      SDMMC-Host am WiFi/BT-Taktgate DPORT_WIFI_CLK_EN Bit 13
+ *      (esp_hal_sd/esp32/include/hal/sdmmc_ll.h:122-130). Ist es zu, ist der
+ *      Block tot und jede Registerabfrage laeuft in den Timeout.
+ *   2. Kommt der Block aus dem Reset? (DPORT_CORE_RST_EN Bit 6 und der
+ *      Reset-Handshake in SDMMC.ctrl, den sd_host_reset abfragt.)
+ *   3. Nimmt die CIU ein Update-Clock-Kommando an? Das wird hier genauso
+ *      aufgebaut wie in sd_host_slot_clock_update_command
+ *      (sd_host_sdmmc.c:985-989): card_num, update_clk_reg, wait_complete.
+ *
+ * Zweckmaessig NACH einem fehlgeschlagenen "sd_mount" aufrufen, dann ist der
+ * Zustand genau der des Fehlerfalls. Achtung: der Reset-Test stoert eine
+ * laufende Karte - nur zur Diagnose benutzen.
+ */
+static const char *sdreg_fsm(uint32_t cmd_fsm_state)
+{
+    /* Synopsys CIU-Kommando-FSM (SDMMC.status.cmd_fsm_state). */
+    switch (cmd_fsm_state) {
+    case 0:  return "idle";
+    case 1:  return "send_init";
+    case 2:  return "send_cmd";
+    case 4:  return "recv_resp";
+    case 5:  return "wait_ccrc";
+    case 6:  return "wait_ccrc2";
+    case 7:  return "recv_resp_end";
+    case 8:  return "wait_rcrc";
+    case 9:  return "wait_rcrc2";
+    case 10: return "wait_rcrc3";
+    case 11: return "wait_ncrc";
+    case 12: return "wait_ncrc2";
+    case 13: return "wait_ncrc3";
+    default: return "?";
+    }
+}
+
+/*
+ * Ist das Bus-Taktgate des SDIO-Hosts offen? Auf dem ESP32 ist das
+ * DPORT_WIFI_CLK_EN Bit 13 (DPORT_WIFI_CLK_SDIO_HOST_EN), siehe
+ * esp_hal_sd/esp32/include/hal/sdmmc_ll.h:122-130.
+ */
+static bool sdreg_gate_on(void)
+{
+    return (DPORT_REG_READ(DPORT_WIFI_CLK_EN_REG) & DPORT_WIFI_CLK_SDIO_HOST_EN) != 0;
+}
+
+/*
+ * Ein CIU-Update-Clock-Kommando absetzen und warten, bis die Hardware
+ * start_command selbst loescht - genau das, was sd_host_slot_start_command()
+ * tut und was im Fehlerfall in den Timeout laeuft.
+ *
+ * Rueckgabe: true = Kommando angenommen, false = start_command bleibt stehen.
+ */
+/*
+ * CMD8 absetzen und dabei die Kommando-FSM mitlesen.
+ *
+ * WOZU: Ein Update-Clock-Kommando laesst sich nicht von einem verlorenen
+ * Schreibzugriff unterscheiden - beide lassen `start_command = 0` lesen (das
+ * hat den ersten Testaufbau in die Irre gefuehrt). Ein normales Kommando mit
+ * Antwortpflicht bewegt dagegen die Kommando-FSM des CIU
+ * (SDMMC.status.cmd_fsm_state): steht sie nach dem Schreiben nicht mehr auf
+ * "idle", hat die CIU das Kommando angenommen und arbeitet.
+ */
+static void sdreg_cmd8_test(const char *was)
+{
+    SDMMC.cmdarg = 0x1AA;               /* CMD8-Argument (VHS + Checkmuster) */
+
+    SDMMC.cmd.cmd_index = 8;
+    SDMMC.cmd.response_expect = 1;
+    SDMMC.cmd.check_response_crc = 1;
+    SDMMC.cmd.card_num = 1;
+    SDMMC.cmd.use_hold_reg = 1;
+    SDMMC.cmd.start_command = 1;
+
+    int64_t t0 = esp_timer_get_time();
+    int64_t t_clear = -1;
+    uint32_t verlauf[8] = {0};
+    int n_verlauf = 0;
+    uint32_t letzte = 0xFF;
+
+    while ((esp_timer_get_time() - t0) < 5000) {
+        uint32_t fsm = SDMMC.status.cmd_fsm_state;
+        if (fsm != letzte) {
+            if (n_verlauf < 8) {
+                verlauf[n_verlauf++] = fsm;
+            }
+            letzte = fsm;
+        }
+        if (SDMMC.cmd.start_command == 0) {
+            t_clear = esp_timer_get_time() - t0;
+            break;
+        }
+        esp_rom_delay_us(2);
+    }
+
+    printf("  CMD8 %s: start_command %s", was,
+           SDMMC.cmd.start_command == 0 ? "geloescht" : "steht noch");
+    if (t_clear >= 0) {
+        printf(" nach %d us", (int)t_clear);
+    } else {
+        printf(" (5 ms)");
+    }
+    printf(", FSM-Verlauf:");
+    for (int i = 0; i < n_verlauf; i++) {
+        printf(" %s", sdreg_fsm(verlauf[i]));
+    }
+    printf("  RINTSTS=%08" PRIx32 "\n", SDMMC.rintsts.val);
+}
+
+static bool sdreg_ciu_test(int slot, int *dt_us)
+{    SDMMC.clkena.val &= ~(uint32_t)BIT(slot);
+
+    SDMMC.cmdarg = 0;
+    SDMMC.cmd.card_num = slot;
+    SDMMC.cmd.update_clk_reg = 1;
+    SDMMC.cmd.wait_complete = 1;
+    SDMMC.cmd.use_hold_reg = 1;
+    SDMMC.cmd.start_command = 1;
+
+    int64_t t0 = esp_timer_get_time();
+    while (SDMMC.cmd.start_command != 0 && (esp_timer_get_time() - t0) < 200000) {
+        esp_rom_delay_us(20);
+    }
+    *dt_us = (int)(esp_timer_get_time() - t0);
+    return SDMMC.cmd.start_command == 0;
+}
+
+/*
+ * Taktgate-Sampler. Laeuft auf dem zweiten Kern, waehrend der Konsolen-Task in
+ * sdmmc_card_init() blockiert.
+ *
+ * Er protokolliert ALLE Aenderungen der fuer den Fehler wichtigen Register:
+ *   start_command  - wird von der Hardware geloescht, wenn die CIU das
+ *                    Kommando annimmt (sdmmc_struct.h:70)
+ *   clkena         - Kartentakt (Bit n) und Low-Power (Bit 16+n)
+ *   clkdiv/clksrc  - Kartenteiler
+ *   clock (0x800)  - Hostteiler (div_factor_*)
+ *   status         - u. a. cmd_fsm_state und data_busy
+ * Damit ist sichtbar, welches der drei Update-Kommandos in
+ * sd_host_slot_set_card_clk() (Zeilen 567, 590, 600) haengen bleibt und wann
+ * welcher Registerwert geschrieben wurde.
+ */
+static volatile bool s_sdtrace_laeuft;
+
+static void sdtrace_task(void *arg)
+{
+    int laufzeit_ms = (int)(intptr_t)arg;
+    uint32_t l_start = 9, l_clkena = 9, l_clkdiv = 9, l_clock = 9, l_status = 9;
+    int64_t t0 = esp_timer_get_time();
+
+    printf("[sdtrace] Start: Gate=%s\n", sdreg_gate_on() ? "AN" : "AUS");
+    while (s_sdtrace_laeuft && (esp_timer_get_time() - t0) < (int64_t)laufzeit_ms * 1000) {
+        uint32_t start = SDMMC.cmd.start_command;
+        uint32_t clkena = SDMMC.clkena.val;
+        uint32_t clkdiv = SDMMC.clkdiv.val;
+        uint32_t clock = SDMMC.clock.val;
+        uint32_t status = SDMMC.status.val;
+
+        if (start != l_start || clkena != l_clkena || clkdiv != l_clkdiv ||
+            clock != l_clock || status != l_status) {
+            printf("[sdtrace] %6d us: start=%u clkena=%08" PRIx32 " clkdiv=%08" PRIx32
+                   " clock=%08" PRIx32 " status=%08" PRIx32 " (FSM=%s)\n",
+                   (int)(esp_timer_get_time() - t0), (unsigned)start, clkena, clkdiv, clock,
+                   status, sdreg_fsm((status >> 4) & 0xF));
+            l_start = start;
+            l_clkena = clkena;
+            l_clkdiv = clkdiv;
+            l_clock = clock;
+            l_status = status;
+        }
+        esp_rom_delay_us(50);
+    }
+    printf("[sdtrace] Ende bei %d us\n", (int)(esp_timer_get_time() - t0));
+    vTaskDelete(NULL);
+}
+
+/*
+ * VERID des geclockten Blocks. Nur dieser Wert beweist, dass das
+ * Registerinterface antwortet: bei geschlossenem Taktgate liefern ALLE
+ * Register denselben Wert (0x0000b7cf gemessen), und ein "start_command = 0"
+ * ist dann kein Erfolg, sondern ein verlorener Schreibzugriff.
+ */
+#define SDREG_VERID_LEBT  0x5342270aUL
+
+static void sdreg_lage(const char *was)
+{
+    uint32_t verid = SDMMC.verid;
+    printf("  %-30s VERID=%08" PRIx32 " %s  CLOCK=%08" PRIx32 " CLKDIV=%08" PRIx32
+           " CLKENA=%08" PRIx32 " start=%u STATUS=%08" PRIx32 "\n",
+           was, verid, (verid == SDREG_VERID_LEBT) ? "lebt" : "TOT ",
+           SDMMC.clock.val, SDMMC.clkdiv.val, SDMMC.clkena.val,
+           (unsigned)SDMMC.cmd.start_command, SDMMC.status.val);
+}
+
+static void sdreg_wait_reset(void)
+{
+    int64_t t0 = esp_timer_get_time();
+    while ((SDMMC.ctrl.val & 0x7) != 0 && (esp_timer_get_time() - t0) < 100000) {
+        esp_rom_delay_us(20);
+    }
+    printf("  Reset-Handshake: CTRL=%08" PRIx32 " nach %d us\n",
+           SDMMC.ctrl.val, (int)(esp_timer_get_time() - t0));
+}
+
+static int cmd_sdreg(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+
+    /*
+     * DPORT-Register duerfen NICHT mit REG_READ gelesen werden - IDF besteht
+     * auf DPORT_REG_READ (soc/esp32/include/soc/soc.h:33-58, IS_DPORT_REG).
+     */
+    uint32_t clk_en = DPORT_REG_READ(DPORT_WIFI_CLK_EN_REG);
+    printf("DPORT_WIFI_CLK_EN = 0x%08" PRIx32 "  SDIO-Host-Takt (Bit13): %s\n",
+           clk_en, (clk_en & DPORT_WIFI_CLK_SDIO_HOST_EN) ? "AN" : "AUS");
+
+    uint32_t core_rst = DPORT_REG_READ(DPORT_CORE_RST_EN_REG);
+    printf("DPORT_CORE_RST_EN = 0x%08" PRIx32 "  SDIO-Host-Reset (Bit6): %s\n",
+           core_rst, (core_rst & DPORT_SDIO_HOST_RST) ? "AKTIV" : "aus");
+
+    printf("SDMMC VERID=0x%08" PRIx32 " HCON=0x%08" PRIx32
+           " CTRL=0x%08" PRIx32 " CLKDIV=0x%08" PRIx32
+           " CLKSRC=0x%08" PRIx32 " CLKENA=0x%08" PRIx32 " CLOCK=0x%08" PRIx32 "\n",
+           SDMMC.verid, SDMMC.hcon.val, SDMMC.ctrl.val, SDMMC.clkdiv.val,
+           SDMMC.clksrc.val, SDMMC.clkena.val, SDMMC.clock.val);
+    printf("SDMMC STATUS=0x%08" PRIx32 " (FSM=%s, Daten-FSM %s) RINTSTS=0x%08" PRIx32
+           " CDETECT=0x%08" PRIx32 " RST_N(cards)=0x%x\n",
+           SDMMC.status.val, sdreg_fsm(SDMMC.status.cmd_fsm_state),
+           SDMMC.status.data_fsm_busy ? "busy" : "frei",
+           SDMMC.rintsts.val, SDMMC.cdetect.val, (unsigned)SDMMC.rst_n.cards);
+    printf("SDMMC CMD.start_command=%u update_clk_reg=%u wait_complete=%u card_num=%u\n",
+           (unsigned)SDMMC.cmd.start_command, (unsigned)SDMMC.cmd.update_clk_reg,
+           (unsigned)SDMMC.cmd.wait_complete, (unsigned)SDMMC.cmd.card_num);
+    printf("  Karte laut CDETECT: Karte0 %s, Karte1 %s\n",
+           (SDMMC.cdetect.cards & BIT(0)) ? "fehlt" : "gesteckt",
+           (SDMMC.cdetect.cards & BIT(1)) ? "fehlt" : "gesteckt");
+
+    /*
+     * Taktlage. Der SDMMC-Host haengt auf dem ESP32 FEST an PLL_F160M
+     * (PLL/3): sdmmc_ll_select_clk_source() ist ein No-Op
+     * (esp_hal_sd/esp32/include/hal/sdmmc_ll.h:218-221) und
+     * esp_clk_tree_enable_src() fuehrt fuer PLL_F160M nur einen Zaehler, ohne
+     * ein Register anzufassen (esp_hw_support/port/esp32/esp_clk_tree.c:114-153).
+     * Und esp_clk_tree_src_get_freq_hz(PLL_F160M) liefert nur die KONSTANTE
+     * CLK_LL_PLL_160M_FREQ_MHZ (ebd.:44-46) - also den Wert, der im Treiberlog
+     * als "src_freq_hz: 160000000" erscheint. Das ist eine Annahme, kein
+     * Messwert. Deshalb hier die tatsaechliche Lage: CPU, APB, XTAL und
+     * PLL_D2 (PLL_D2 = PLL/2, daraus folgt die PLL selbst).
+     */
+    uint32_t f_xtal = 0, f_plld2 = 0, f_f160 = 0;
+    esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_XTAL, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &f_xtal);
+    esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_PLL_D2, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &f_plld2);
+    esp_clk_tree_src_get_freq_hz(SOC_MOD_CLK_PLL_F160M, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &f_f160);
+    printf("Takt: CPU=%d Hz, APB=%d Hz, XTAL=%u Hz, PLL_D2=%u Hz -> PLL=%u Hz, PLL_F160M=%u Hz\n",
+           esp_clk_cpu_freq(), esp_clk_apb_freq(), (unsigned)f_xtal,
+           (unsigned)f_plld2, (unsigned)(f_plld2 * 2), (unsigned)f_f160);
+    printf("Flash-Register: SPI0.clock=0x%08" PRIx32 " SPI1.clock=0x%08" PRIx32 "\n",
+           SPI0.clock.val, SPI1.clock.val);
+
+    /*
+     * ERSTE FRAGE: oeffnet der Treiber das Taktgate ueberhaupt, wenn es zu ist?
+     * Bisher ist nur bewiesen, dass es AN *bleibt*, wenn ich es vorher selbst
+     * gesetzt habe. Also: Gate erzwingen zu, dann sdmmc_host_init() und nachsehen.
+     */
+    DPORT_REG_CLR_BIT(DPORT_WIFI_CLK_EN_REG, DPORT_WIFI_CLK_SDIO_HOST_EN);
+    printf("Gate zwangsweise AUS -> jetzt %s\n", sdreg_gate_on() ? "AN (leider)" : "AUS");
+    esp_err_t rc_t = sdmmc_host_init();
+    printf("sdmmc_host_init() aus AUS: 0x%x -> Gate jetzt %s  %s\n", rc_t,
+           sdreg_gate_on() ? "AN" : "AUS",
+           sdreg_gate_on() ? "(Treiber oeffnet das Gate)"
+                           : "(TREIBER OEFFNET DAS GATE NICHT - das ist die Ursache)");
+    sdreg_lage("nach sdmmc_host_init aus AUS");
+    DPORT_REG_SET_BIT(DPORT_WIFI_CLK_EN_REG, DPORT_WIFI_CLK_SDIO_HOST_EN);
+
+    /*
+     * Der Block wird von Hand in den arbeitsfaehigen Zustand gebracht:
+     * Taktgate auf (DPORT_WIFI_CLK_EN Bit 13) und Modul-Reset.
+     */
+    printf("Taktgate gesetzt -> %s\n", sdreg_gate_on() ? "AN" : "AUS (Schreiben wirkungslos!)");
+
+    SDMMC.ctrl.controller_reset = 1;
+    SDMMC.ctrl.fifo_reset = 1;
+    SDMMC.ctrl.dma_reset = 1;
+    sdreg_wait_reset();
+    sdreg_lage("nach Reset");
+
+    int dt = 0;
+    bool ok = sdreg_ciu_test(1, &dt);
+    printf("CIU mit Init-Teilern: %d us, start_command=%u -> %s\n", dt,
+           (unsigned)SDMMC.cmd.start_command, ok ? "angenommen" : "haengt");
+    sdreg_lage("nach CIU (Init-Teiler)");
+
+    /*
+     * Jetzt die Schritte aus sd_host_slot_set_card_clk() (sd_host_sdmmc.c:565-595)
+     * EINZELN nachfahren. Verdacht: das Neuprogrammieren von SDMMC.clock (0x800)
+     * stoppt den Kern des Blocks, danach nimmt die CIU nichts mehr an - genau das
+     * Bild aus dem Fehlerlog. Fuer 400 kHz (Probing, erster Zugriff im
+     * Karten-Init) rechnet der Treiber host_div=10, card_div=20
+     * (sd_host_sdmmc.c:1125-1127); sdmmc_ll_set_clock_div(10) schreibt
+     * div_factor_h = 9, div_factor_l = 4, div_factor_n = 9
+     * (esp_hal_sd/esp32/include/hal/sdmmc_ll.h:229-247).
+     */
+    SDMMC.clkena.val &= ~(uint32_t)BIT(1);
+    sdreg_lage("Kartentakt aus");
+
+    SDMMC.clksrc.card1 = 1;
+    SDMMC.clkdiv.div1 = 20;
+    sdreg_lage("Kartenteiler 20");
+
+    SDMMC.clock.div_factor_h = 9;
+    SDMMC.clock.div_factor_l = 4;
+    SDMMC.clock.div_factor_n = 9;
+    SDMMC.clock.phase_dout = 4;
+    SDMMC.clock.phase_din = 4;
+    SDMMC.clock.phase_core = 0;
+    sdreg_lage("Hostteiler 10 (clock 0x800)");
+
+    ok = sdreg_ciu_test(1, &dt);
+    printf("CIU mit 400-kHz-Teilern: %d us, start_command=%u -> %s\n", dt,
+           (unsigned)SDMMC.cmd.start_command, ok ? "angenommen" : "haengt");
+    sdreg_lage("nach CIU (400-kHz-Teiler)");
+
+    /* Gegenprobe: zurueck auf die Teiler aus dem Treiber-Init (div = 2). */
+    SDMMC.clock.div_factor_h = 1;
+    SDMMC.clock.div_factor_l = 0;
+    SDMMC.clock.div_factor_n = 1;
+    sdreg_lage("Hostteiler 2 (clock 0x800)");
+    ok = sdreg_ciu_test(1, &dt);
+    printf("CIU mit Init-Teiler 2: %d us, start_command=%u -> %s\n", dt,
+           (unsigned)SDMMC.cmd.start_command, ok ? "angenommen" : "haengt");
+
+    /*
+     * Und jetzt der echte Treiberweg. Nach jedem Schritt steht die Lebendigkeit
+     * des Blocks dabei - damit ist zu sehen, ob der Treiber ihn umbringt.
+     */
+    printf("Treiberweg:\n");
+    esp_err_t rc = sdmmc_host_init();
+    printf("  sdmmc_host_init():       0x%x (Gate %s)\n", rc, sdreg_gate_on() ? "AN" : "AUS");
+    sdreg_lage("nach sdmmc_host_init");
+
+    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot.clk   = GPIO_NUM_14;
+    slot.cmd   = GPIO_NUM_15;
+    slot.d0    = GPIO_NUM_2;
+    slot.width = 1;
+    slot.cd    = GPIO_NUM_34;
+    slot.wp    = SDMMC_SLOT_NO_WP;
+    slot.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    rc = sdmmc_host_init_slot(1, &slot);
+    printf("  sdmmc_host_init_slot(1): 0x%x\n", rc);
+    sdreg_lage("nach sdmmc_host_init_slot");
+
+    ok = sdreg_ciu_test(1, &dt);
+    printf("  CIU nach Treiber-Init: %d us, start_command=%u -> %s\n", dt,
+           (unsigned)SDMMC.cmd.start_command, ok ? "angenommen" : "haengt");
+
+    /*
+     * Der eigentliche Karten-Init - der Aufruf, der im Feld 0x107 liefert.
+     * Ein zweiter Task tastet dabei das Taktgate ab.
+     */
+    s_sdtrace_laeuft = true;
+    xTaskCreatePinnedToCore(sdtrace_task, "sdtrace", 3072, (void *)(intptr_t)1500, 10, NULL, 1);
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.max_freq_khz = 4000;   /* wie SD_MAX_FREQ_KHZ in sd_card.c */
+    sdmmc_card_t card = {0};
+    esp_err_t rc5 = sdmmc_card_init(&host, &card);
+    printf("  sdmmc_card_init():       0x%x\n", rc5);
+    sdreg_lage("nach sdmmc_card_init");
+    vTaskDelay(pdMS_TO_TICKS(1700));    /* Sampler auslaufen lassen */
+    s_sdtrace_laeuft = false;
+
+    /*
+     * Test 7: verarbeitet die CIU ueberhaupt Kommandos - und braucht sie dafuer
+     * den Kartentakt? Beides einmal mit abgeschaltetem und einmal mit
+     * eingeschaltetem cclk, jeweils aus einem frisch resetteten Block.
+     */
+    printf("Test 7 CIU-Kommandoverarbeitung (CMD8):\n");
+    SDMMC.ctrl.controller_reset = 1;
+    sdreg_wait_reset();
+    SDMMC.clkena.val &= ~(uint32_t)BIT(1);          /* wie sd_host_slot_set_card_clk */
+    sdreg_cmd8_test("bei Kartentakt AUS");
+
+    SDMMC.ctrl.controller_reset = 1;
+    sdreg_wait_reset();
+    SDMMC.clkena.val |= (uint32_t)BIT(1);
+    sdreg_cmd8_test("bei Kartentakt AN ");
+    SDMMC.clkena.val &= ~(uint32_t)BIT(1);
+    return 0;
 }
 
 static int cmd_version(int argc, char **argv)
@@ -1107,6 +1846,36 @@ void cli_register_sys()
             .help = "Mount the microSD card at /sdcard",
             .hint = NULL,
             .func = &cmd_sd_mount,
+        },
+        {
+            .command = "sdreg",
+            .help = "Dump SDMMC host registers and test the CIU clock update",
+            .hint = NULL,
+            .func = &cmd_sdreg,
+        },
+        {
+            .command = "sd_mount_spi",
+            .help = "Mount the SD card over SPI on any pins",
+            .hint = "[clk mosi miso cs]",
+            .func = &cmd_sd_mount_spi,
+        },
+        {
+            .command = "sdpins",
+            .help = "Drive the SDMMC lines as GPIOs and read them back",
+            .hint = NULL,
+            .func = &cmd_sdpins,
+        },
+        {
+            .command = "eq",
+            .help = "Equalizer behind the mixer: list, bands <n>, set <idx> <typ> <fc> <q> <gain>",
+            .hint = "[bands <n> | set <idx> <typ> <fc> <q> <gain>]",
+            .func = &cmd_eq,
+        },
+        {
+            .command = "scanpins",
+            .help = "Read all usable GPIOs as inputs (find wired serial lines)",
+            .hint = NULL,
+            .func = &cmd_scanpins,
         },
         {
             .command = "sd_unmount",

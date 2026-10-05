@@ -903,3 +903,744 @@ auch nicht "nur lesend" und auch nicht aus einem Task mit niedriger Prioritaet.
 Messwerte 0.9.41 (WROVER, kein PSRAM, Soundbar 48000 Hz, Dateien im Wechsel):
 Stream laeuft, 0 Resets, 0 Job-Fehler, freier Heap 78 204 Byte, groesster
 zusammenhaengender Block 30 720 Byte, CPU Kern0 37-40 %, Kern1 71-73 %.
+
+## 12. Nachtrag SD-Karte (Messungen 0.9.42 - 0.9.46, 04.10.)
+
+Alles hier ist am laufenden Geraet gemessen, nicht aus Quellen geschlossen.
+
+### 12a. Der SD-Takt ist es nicht (0.9.42)
+
+`SD_MAX_FREQ_KHZ` von 20000 auf 4000 und `SD_SPI_MAX_FREQ_KHZ` von 10000 auf
+1000 gesenkt, auf den WROOM geflasht. Ergebnis unveraendert:
+
+```
+I (46463) SD_CARD: SDMMC-Versuch 1/3 (max 4000 kHz)
+E (47468) SD_HOST: sd_host_slot_clock_update_command(993): sd_host_start_command returned 0x107
+E (47469) SD_HOST: sd_host_slot_set_card_clk(568): ... returned 0x107, failed to disable clk
+```
+
+Flash-Takt im geflashten Image gegengeprueft: `FLASHFREQ_40M` in
+`build/config/sdkconfig.h`, Strings `SPI Speed` / `40MHz` im Bootloader-Binary,
+`spi_speed` im Image-Header = 0.
+
+### 12b. Karte, Halter und Verkabelung sind es nicht (0.9.42)
+
+- **Karte herausgezogen**: identischer 0x107 im CIU-Clock-Update.
+- **SD-Breakout komplett von den ESP32-Pins abgeklemmt**: identischer 0x107.
+
+Der Fehler tritt also auf, bevor ein Bit zur Karte geht. (GPIO34 als Card-Detect
+ist dabei wertlos: der Pin floatet ohne externen 10k nach 3,3 V auf LOW, meldet
+also immer "Karte gesteckt".)
+
+### 12c. Registerdiagnose `sdreg` (0.9.43 ff.)
+
+Neues CLI-Kommando (main/cmd_reg.c): liest `DPORT_WIFI_CLK_EN`,
+`DPORT_CORE_RST_EN` und den SDMMC-Block aus, setzt ein CIU-Update-Clock-Kommando
+genau wie `sd_host_slot_clock_update_command` ab und pollt `start_command`.
+
+Befund bei geschlossenem Taktgate (`DPORT_WIFI_CLK_EN` Bit 13 = 0):
+
+```
+DPORT_WIFI_CLK_EN = 0xffff8800  SDIO-Host-Takt (Bit13): AUS
+SDMMC VERID=0000b7cf HCON=0000b7cf CTRL=0000b7cf CLKDIV=0000b7cf CLKSRC=0000b7cf CLKENA=0000b7cf CLOCK=00020224
+```
+
+**Alle Register liefern denselben Wert `0x0000b7cf`, nur `CLOCK` (0x800) nicht.**
+Das ist kein Datenfehler, sondern ein nicht getakteter Block: bei fehlendem
+Modultakt treibt der Peripherieblock den APB-Bus nicht, die gelesenen Werte sind
+Zufall. `VERID` ist deshalb die Lebendigkeitspruefung: **nur `0x5342270a`
+(Synopsys-Version) heisst "Block lebt".** Wichtig: bei totem Block ist auch ein
+`start_command = 0` kein Erfolg, sondern ein **verlorener Schreibzugriff** - der
+erste Testaufbau hat das falsch als "angenommen" gewertet.
+
+Zustaendig fuer das Gate ist `esp_perip_clk_init()`
+(`components/esp_system/port/soc/esp32/clk.c:250-256,310`): es loescht beim Start
+`DPORT_WIFI_CLK_SDIO_HOST_EN` zusammen mit den WiFi/BT-Bits. Im ganzen IDF
+schreiben nur zwei Stellen dieses Bit: diese Initialisierung und der
+SDMMC-Treiber (`esp_hal_sd/esp32/include/hal/sdmmc_ll.h:122-130`).
+
+### 12d. Das Gate ist NICHT die Ursache des Mountfehlers (0.9.46)
+
+Der Sampler (zweiter Task, 100-us-Raster) laeuft waehrend `sdmmc_card_init()`
+mit. Ergebnis:
+
+```
+Gate zwangsweise AUS -> sdmmc_host_init() -> Gate jetzt AN   (Treiber oeffnet das Gate)
+Hostteiler 10 (SDMMC.clock 0x800) programmiert -> CIU nimmt an
+sdmmc_card_init()  -> 0x107
+  danach: start_command=1  STATUS=00000306 (data_busy=1)   Gate die ganze Zeit AN
+```
+
+Damit ist belegt: der Treiber oeffnet das Taktgate selbst, das Gate bleibt
+waehrend des Fehlers offen, und die Taktprogrammierung ist unschuldig.
+
+### 12e. Der Fehler ist modulabhaengig - Gegenprobe WROVER (0.9.46)
+
+Identischer Build (NoPsram, Flash 40 MHz, SD-Takt 4000 kHz) auf beide Module:
+
+| Modul | Ergebnis |
+|---|---|
+| WROVER (COM3, `68:fe:71:91:08:8c`) | `I (1125) mounted at /sdcard (SDMMC 1 Bit)`, Name USDU1, SDHC - **103 ms** |
+| WROOM (COM7, `ec:c9:ff:fd:60:c0`) | `0x107` im ersten CIU-Clock-Update, Timeout nach 1 s |
+
+**Damit ist die Firmware als Ursache widerlegt** (der WROVER mountet mit
+demselben Build) und der Rest ist modul-/platinenspezifisch.
+
+Registervergleich am selben Codepunkt (`sdreg` auf beiden Modulen):
+
+| | WROVER | WROOM |
+|---|---|---|
+| `DPORT_WIFI_CLK_EN` | `0xffffabc9` (Bit13 AN) | `0xffff8800` (Bit13 AUS, nach Fehlversuch) |
+| WiFi/BT-Common-Bits (0,3,6,7,9) | gesetzt (Karte war gemountet) | nicht gesetzt - **Messartefakt, siehe 12n** |
+| `SDMMC VERID` / `HCON` | `5342270a` / `03c44c83` | identisch |
+| CIU-Test mit 400-kHz-Teilern | angenommen (1 us) | angenommen (1 us) |
+
+Die CIU antwortet auf **von Hand** abgesetzte Kommandos auf beiden Modulen
+gleich - der Unterschied liegt also nicht im Registerverhalten des Blocks.
+
+### 12f. Was als Naechstes zu pruefen ist
+
+1. **Pull-ups - geprueft am 04.10.: ERLEDIGT, nicht die Ursache.** CLK (GPIO14),
+   CMD (GPIO15) und DAT0 (GPIO2) haben je 10k nach 3,3 V. Ohnehin entlastet
+   dadurch, dass der Fehler auch bei **komplett abgeklemmtem SD-Modul** auftrat,
+   also ganz ohne Leitungen und Pull-ups.
+2. **PSRAM-Konfiguration als 1-Variable-Test.** Die Taktquelle des SDMMC ist
+   `SOC_MOD_CLK_PLL_F160M` (`soc/esp32/include/soc/clk_tree_defs.h:460-468`),
+   bei CPU 240 MHz also 160 MHz - in beiden Builds gleich. Ein PSRAM-Build auf
+   dem WROOM (`SPIRAM` + `SPIRAM_IGNORE_NOTFOUND`, laeuft auch ohne PSRAM-Chip)
+   testet die Vermutung trotzdem direkt.
+3. **Bisect im Treiber:** `sd_host_slot_set_card_clk()` direkt aufrufen und ihre
+   Schritte einzeln durch eigene Registerzugriffe ersetzen. Offen ist, warum
+   derselbe Registerinhalt von eigenem Code angenommen wird, vom Treiberpfad
+   aber nicht.
+
+### 12g. PSRAM ist es auch nicht (0.9.47, 04.10.)
+
+Die letzte systematische Konfigurationsdifferenz zwischen WROVER und WROOM ist
+PSRAM - und dafuer gibt es sogar einen Mechanismus: mit PSRAM laeuft beim Start
+die MSPI-Timing-Abstimmung, die Flash/PSRAM-Takt und damit die **SPLL**
+konfiguriert; die SDMMC-Quelle `PLL_F160M` ist SPLL/3
+(`soc/esp32/include/soc/clk_tree_defs.h:460-468`). Genau diese Kopplung steckt
+auch hinter dem alten Befund "Flash 80 MHz -> SD faellt aus".
+
+Test als 1-Variable-Experiment: PSRAM-Build auf den WROOM. Der Build laeuft dort
+auch ohne PSRAM-Chip, weil `CONFIG_SPIRAM_IGNORE_NOTFOUND=y` gesetzt ist
+(verifiziert im gebauten `build/config/sdkconfig.h`):
+
+```
+#define CONFIG_SPIRAM 1
+#define CONFIG_SPIRAM_SPEED_40M 1
+#define CONFIG_SPIRAM_BOOT_INIT 1
+#define CONFIG_SPIRAM_IGNORE_NOTFOUND 1
+#define CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ 240
+#define CONFIG_ESPTOOLPY_FLASHFREQ "40m"
+```
+
+Ergebnis auf dem WROOM (0.9.47):
+
+```
+E (899) quad_psram: PSRAM ID read error: 0xffffffff, PSRAM chip not found or not supported
+I (1084) SD_CARD: SDMMC-Versuch 1/3 (max 4000 kHz)
+W (2125) SD_CARD: SDMMC-Versuch 1 fehlgeschlagen: ESP_ERR_TIMEOUT
+```
+
+**Unveraendert 0x107.** Zusammen mit der WROVER-Zeile "PSRAM aus, 40 MHz Flash,
+SD laeuft" (Abschnitt 6) ist PSRAM damit in beide Richtungen widerlegt: die
+Konfiguration ist es nicht, und das Vorhandensein des PSRAM-Chips kann es nicht
+sein, weil der WROVER auch ohne PSRAM-Konfiguration mountet.
+
+### 12h. Zwei Fehler auf demselben Board - einer davon war unserer
+
+Auf dem WROOM fallen **beide** Wege aus:
+
+| Weg | Peripherie | Fehler |
+|---|---|---|
+| SDMMC 1 Bit | SDMMC-Host, IOMUX 14/15/2 | 0x107 im CIU-Clock-Update |
+| SPI | SPI2-Host, 14/15/2 + CS 13 | `send_if_cond (1) returned 0x108` - CMD8 ohne Antwort |
+
+**KORREKTUR (04.10., vom Betreiber der Platine): GPIO13 ist auf dieser Platine
+NICHT verdrahtet.** Damit ist der SPI-Fehler vollstaendig erklaert und die
+Deutung "zwei unabhaengige Fehler, also die Kartenanbindung" war falsch: der
+SPI-Weg benutzt GPIO13 als CS (`sd_card.c`, `SD_PIN_CS`), die Karte bekommt also
+nie ein Chip-Select. `send_if_cond (1) returned 0x108` ist die zwangslaeufige
+Folge. Der SPI-Fallback bleibt als Absicherung im Code, kann auf DIESER Platine
+aber prinzipbedingt nicht funktionieren.
+
+Damit bleibt als einziger echter Fehler der SDMMC-Weg (Abschnitt 12j/12k).
+
+### 12i. Taktlage gemessen - auch nicht die Ursache (0.9.48)
+
+`sdreg` gibt jetzt die tatsaechliche Taktlage aus (`esp_clk_cpu_freq()`,
+`esp_clk_apb_freq()`, `esp_clk_tree_src_get_freq_hz` fuer XTAL/PLL_D2/PLL_F160M,
+dazu die Flash-Register). WROOM (COM7):
+
+```
+Takt: CPU=240000000 Hz, APB=80000000 Hz, XTAL=40000000 Hz,
+      PLL_D2=240000000 Hz -> PLL=480000000 Hz, PLL_F160M=160000000 Hz
+Flash-Register: SPI0.clock=0x00001001 SPI1.clock=0x00001001
+```
+
+**Damit stimmt die Annahme des Treibers exakt.** Wichtig zum Hintergrund: der
+SDMMC-Host haengt auf dem ESP32 FEST an PLL_F160M (PLL/3), weil
+`sdmmc_ll_select_clk_source()` ein No-Op ist
+(`esp_hal_sd/esp32/include/hal/sdmmc_ll.h:218-221`) und
+`esp_clk_tree_enable_src()` fuer PLL_F160M nur einen Zaehler fuehrt, ohne ein
+Register anzufassen (`esp_hw_support/port/esp32/esp_clk_tree.c:114-153`).
+`esp_clk_tree_src_get_freq_hz(PLL_F160M)` liefert nur die **Konstante**
+`CLK_LL_PLL_160M_FREQ_MHZ` (ebd.:44-46) - der Wert "src_freq_hz: 160000000" im
+Treiberlog ist also eine Annahme. Hier ist er nachgemessen und richtig.
+
+### 12j. Die CIU braucht den Kartentakt - und ein Widerspruch bleibt (0.9.48)
+
+Neuer Test in `sdreg`: ein **CMD8 mit Ruecklesung der Kommando-FSM**. Grund: ein
+Update-Clock-Kommando laesst sich nicht von einem verlorenen Schreibzugriff
+unterscheiden (beide lassen `start_command = 0` lesen) - ein normales Kommando
+mit Antwortpflicht bewegt dagegen die FSM.
+
+```
+CMD8 bei Kartentakt AUS: start_command steht noch (5 ms), FSM-Verlauf: idle
+CMD8 bei Kartentakt AN : start_command geloescht nach 2 us, FSM-Verlauf: idle
+```
+
+Ergebnis: **die CIU verarbeitet ein normales Kommando nur bei laufendem
+Kartentakt.** Fuer das Update-Clock-Kommando gilt das nicht - die eigenen
+Testkommandos werden auch bei abgeschaltetem Takt angenommen, sind also echte
+Annahmen und keine Schreibverluste.
+
+Offen bleibt ein Widerspruch: nach dem fehlgeschlagenen `sdmmc_card_init` steht
+`CLKENA = 0x00020000`, also Bit 17 (Kartentakt-Low-Power). Dieses Bit setzt der
+Treiber nur in `sd_host_slot_set_card_clk()` **nach** einem erfolgreichen ersten
+Update-Kommando (`sd_host_sdmmc.c:599`). Es muss also vorher schon ein Update
+durchgelaufen sein - und `sd_host_slot_start_command()` bricht sowohl beim ersten
+Warten (auf `start_command == 0`, Zeile 951-960) als auch nach dem Schreiben
+(Zeile 967-976) mit demselben `ESP_ERR_TIMEOUT` ab. Der naechste Schritt waere
+eine **Registerverlaufsaufzeichnung** (Sampler, der `start_command`, `clkena`,
+`clkdiv`, `clock` und `status` waehrend `sdmmc_card_init` auf Aenderungen
+mitschreibt) - damit ist sichtbar, welches der drei Update-Kommandos haengen
+bleibt.
+
+### 12k. Registerverlauf waehrend sdmmc_card_init (0.9.49)
+
+Der Sampler zeichnet jetzt jede Aenderung von `start_command`, `clkena`,
+`clkdiv`, `clock` (0x800) und `status` auf (50-us-Raster, zweiter Kern),
+waehrend der Konsolen-Task in `sdmmc_card_init()` blockiert:
+
+```
+[sdtrace] Start: Gate=AN
+[sdtrace]    404 us: start=0 clkena=00000000 clkdiv=00001400 clock=00020224 status=00000106
+[sdtrace]  19654 us: start=0 clkena=00000000 clkdiv=00001400 clock=00021224 status=00000106
+[sdtrace]  21068 us: start=1 clkena=00020000 clkdiv=00001400 clock=00129224 status=00000306
+E SD_HOST: sd_host_slot_clock_update_command(993): sd_host_start_command returned 0x107
+```
+
+Ausgewertet:
+
+- Bei **404 us** ist die Karte **nicht** busy (`status` Bit 9 = 0).
+- `clock=00021224` ist ein Zwischenstand der Teilerprogrammierung
+  (`sdmmc_ll_set_clock_div` schreibt `div_factor_h`, `_l`, `_n` einzeln), danach
+  steht der Endwert `000129224` = Hostteiler 10 = 400 kHz.
+- `clkena=00020000` heisst: **Low-Power-Bit (Bit 17) gesetzt** - das setzt der
+  Treiber nur in `sd_host_slot_set_card_clk()` nach einem *erfolgreichen* Update
+  (`sd_host_sdmmc.c:599`). Der Treiber ist also ueber die Teilerprogrammierung
+  hinausgekommen.
+- Bei **21 ms** ist `status` Bit 9 = 1: **die Karte zieht DAT0 auf LOW (busy)** -
+  und `start_command` bleibt stehen. Der Host verweigert das Kommando, solange
+  die Karte busy ist.
+
+Im selben Lauf wurden beide CMD8-Varianten angenommen (18 us / 14 us), im Lauf
+davor nur die mit Kartentakt. Die Annahme haengt also **nicht** allein am
+Kartentakt, sondern am **busy-Zustand der Karte**.
+
+### 12l. GPIO13 ist auf der Platine nicht verdrahtet
+
+Vom Betreiber der Platine: **CS/DAT3 (GPIO13) ist nicht angeschlossen.** Damit:
+
+- Der **SPI-Fallback** kann dort nicht arbeiten (CS fehlt) - siehe Korrektur in
+  12h. Alle SPI-Fehlermeldungen dieser Messreihe sind dadurch erklaert und
+  duerfen NICHT als Kartenfehler gedeutet werden.
+- Die Massnahme aus 0.9.50 (`sd_dat3_high()`, GPIO13 vor dem SDMMC-Versuch als
+  Ausgang HIGH) ist auf dieser Platine wirkungslos. Sie bleibt im Code, weil
+  DAT3 im 1-Bit-SD-Betrieb laut Spezifikation HIGH liegen muss und der Treiber
+  D1..D3 erst ab 4 Bit Breite anfasst
+  (`esp_driver_sdmmc/src/sd_host_sdmmc.c:1376-1385`).
+- Fuer SDMMC bleiben damit genau die drei Leitungen **CLK=GPIO14, CMD=GPIO15,
+  D0=GPIO2** - alle drei haben 10k-Pull-ups nach 3,3 V (Abschnitt 12f).
+
+Offen ist damit nur noch: warum haelt die Karte auf dem WROOM DAT0 busy,
+waehrend sie auf dem WROVER (gleiche Platine, gleiche Leitungen, gleiche Karte,
+gleicher Build) in 103 ms mountet.
+
+### 12m. Registerverlauf WROVER gegen WROOM - die Karte antwortet nur auf dem WROVER (0.9.50)
+
+Versuchsanordnung: **ein Board, ein Kartenslot, eine Karte, ein Build (0.9.50);
+nur das ESP32-Modul wird im Sockel getauscht.** Auf beiden Modulen derselbe
+Ablauf (`sd_unmount`, dann `sdreg` → Sampler laeuft waehrend
+`sdmmc_card_init()`).
+
+**WROVER:**
+
+```
+[sdtrace]    419 us: start=0 clkena=00000000 clkdiv=00001400 clock=00020224 status=00000106 (FSM=idle)
+[sdtrace]  19482 us: start=0 clkena=00000000 clkdiv=00001400 clock=00129224 status=00000106 (FSM=idle)
+[sdtrace]  20835 us: start=0 clkena=00020002 clkdiv=00001400 clock=00129224 status=00000116 (FSM=send_init)
+[sdtrace]  33226 us: start=0 clkena=00020002 clkdiv=00001400 clock=00129224 status=00000106 (FSM=idle)
+[sdtrace]  45598 us: start=0 clkena=00020002 clkdiv=00001400 clock=00129224 status=0001f906 (FSM=idle)
+  sdmmc_card_init():       0x0
+```
+
+**WROOM:**
+
+```
+[sdtrace]    404 us: start=0 clkena=00000000 clkdiv=00001400 clock=00020224 status=00000106 (FSM=idle)
+[sdtrace]  19654 us: start=0 clkena=00000000 clkdiv=00001400 clock=00021224 status=00000106 (FSM=idle)
+[sdtrace]  21068 us: start=1 clkena=00020000 clkdiv=00001400 clock=00129224 status=00000306 (FSM=idle)
+  sdmmc_card_init():       0x107
+```
+
+| Merkmal | WROVER | WROOM |
+|---|---|---|
+| `start_command` | bleibt 0, CIU nimmt jedes Kommando an | bleibt 1 |
+| `clkena` | `0x20002` - Kartentakt **an** (Bit 1) | `0x20000` - Kartentakt **aus** |
+| `status` | `0x1f906` - **`response_index` != 0, die Karte antwortet** | `0x306` - `data_busy=1`, `response_index=0` |
+| Kommando-FSM | `send_init` -> idle | bleibt idle |
+| `sdmmc_card_init()` | **0x0** | **0x107** |
+
+**Schlussfolgerung:** Auf dem WROVER laeuft der Karten-Init normal durch
+(Takt an, Kommando raus, Antwort da, `response_index` gesetzt). Auf dem WROOM
+**antwortet die Karte nie** - sie geht nur auf busy. Da Board, Slot, Karte,
+Leitungen, Pull-ups, Taktlage (12i), Build und Konfiguration identisch sind und
+das Modul im Sockel getauscht wird, liegt die Ursache **im Modul bzw. in seinen
+Kontakten**, nicht in Firmware oder Konfiguration.
+
+Damit ist die Messreihe zum SD-Ausfall abgeschlossen. Fuer den WROOM bleiben
+Hardware-Schritte: Kontaktierung von GPIO14/15/2 im Sockel pruefen (Durchgang
+Modulpin -> Kartenslot), Modul fest setzen oder loeten, anderes Modul. Der
+WROVER ist die Arbeitsgrundlage.
+
+### 12n. Nachtrag: Artefakt korrigiert, GPIO16/17 frei, Kontaktspur (0.9.50)
+
+Drei Punkte, die den Kreis schliessen:
+
+1. **Der in 12e notierte Registerunterschied zwischen den Modulen war ein
+   Messartefakt.** Mit 0.9.50 zeigt der WROVER im gleichen Zustand (nach
+   `sd_unmount`) denselben Wert wie der WROOM:
+
+   ```
+   WROVER 0.9.50: DPORT_WIFI_CLK_EN = 0xffff8800  (Bit13 AUS)
+   WROOM  0.9.49: DPORT_WIFI_CLK_EN = 0xffff8800  (Bit13 AUS)
+   ```
+
+   Der alte Wert `0xffffabc9` stammte aus einer Messung mit **gemounteter**
+   Karte (dann haelt der Treiber das Taktgate offen). Ebenso identisch ist die
+   Taktlage auf beiden Modulen:
+
+   ```
+   WROVER: CPU=240 MHz, APB=80 MHz, XTAL=40 MHz, PLL=480 MHz, PLL_F160M=160 MHz
+   WROOM : CPU=240 MHz, APB=80 MHz, XTAL=40 MHz, PLL=480 MHz, PLL_F160M=160 MHz
+   ```
+
+2. **GPIO16/17 sind auf der Platine frei** (Auskunft des Betreibers). Damit ist
+   auch der letzte strukturelle Unterschied zwischen WROOM und WROVER (PSRAM
+   belegt dort 16/17) als Ursache ausgeschlossen.
+
+3. **Verbleibende Erklaerung, die ALLE Messungen deckt: eine fehlerhafte
+   Verbindung auf einer der drei Leitungen, insbesondere DAT0 (GPIO2).**
+   Liegt DAT0 dauerhaft auf LOW (Kurzschluss gegen GND, Kontaktfehler im
+   Sockel, defekter Modulpin), dann ergibt sich zwangslaeufig die gemessene
+   Kette:
+
+   | Messung | Folge eines DAT0-Kurzschlusses |
+   |---|---|
+   | `STATUS=0x306`, `data_busy=1` | DAT0 wird als busy gelesen |
+   | `start_command` bleibt 1 (0x107) | die CIU sendet kein Kommando, solange die Karte busy ist |
+   | `response_index = 0`, Karte antwortet nie | es wird nie ein Kommando gesendet |
+   | WROVER laeuft mit demselben Build | dort ist die Verbindung in Ordnung |
+
+   **Pruefungen:** (a) Widerstand jeder der drei Leitungen gegen GND und 3,3 V
+   messen, WROOM gegen WROVER vergleichen; (b) Softwaretest `sdpins`: GPIO14,
+   GPIO15 und GPIO2 als Ausgang treiben (low/high) und zuruecklesen - folgt der
+   Ruecklesewert nicht, ist die Leitung kurzgeschlossen oder zu stark belastet.
+
+### 12o. Die Ursache liegt auf GPIO2 = D0 = DAT0 (04.10., Befund des Betreibers)
+
+Der Betreiber der Platine hat den ausschlaggebenden Hinweis geliefert:
+**das WROVER-Modul laesst sich in der Platine nicht flashen - wegen GPIO2 -
+das WROOM-Modul schon.**
+
+Wichtig: gemeint ist **GPIO2 = D0 = DAT0**, nicht DAT2. Eine fruehere Fassung
+dieses Abschnitts hatte DAT2/GPIO12 als Ursache notiert; das war eine falsche
+Deutung des Hinweises. Die DAT2/GPIO12-Zusammenhаenge bleiben als Hintergrund
+in Abschnitt 12p stehen, sind hier aber NICHT die Ursache.
+
+**GPIO2 ist ein Strapping-Pin** und muss fuer den UART-Download-Modus LOW sein.
+Genau daran haengt auch die SD-Karte: D0 (DAT0) ist dieselbe Leitung. Die
+offizielle Doku beschreibt diesen Konflikt ausdruecklich
+(https://docs.espressif.com/projects/esp-idf/en/release-v4.0/api-reference/peripherals/sd_pullup_requirements.html):
+
+> **GPIO2 Strapping pin:** GPIO2 pin is used as a bootstrapping pin, and should
+> be low to enter UART download mode. **You may find it unable to enter the UART
+> download mode if you correctly connect the pullup of SD on GPIO2.** For
+> WroverKit v3, there are dedicated circuits to pulldown the GPIO2 when
+> downloading. ...
+> Some boards have pulldown and/or LED on GPIO2. LED is usually ok, but
+> **pulldown will interfere with D0 signals and must be removed.** Check the
+> schematic of your development board for anything connected to GPIO2.
+
+Damit passen beide Beobachtungen zusammen:
+
+| Modul | Flashen | SD |
+|---|---|---|
+| WROOM | geht (GPIO2 beim Reset LOW genug) | faellt aus |
+| WROVER | **geht nicht** (GPIO2 beim Reset nicht LOW genug) | **laeuft** |
+
+Und es passt exakt auf die SD-Messungen: In allen fehlgeschlagenen Versuchen
+meldete der Host **`data_busy = 1`**, also **DAT0 = LOW**, und nahm deshalb kein
+Kommando an (`start_command` blieb 1, `response_index = 0`, `0x107`) - siehe
+12k/12m. Eine Leitung, die auf D0 festgehalten wird, erzeugt genau dieses Bild;
+die Doku nennt fuer solche Faelle ausdruecklich LED/Pulldown auf GPIO2 als
+Ursache, die entfernt werden muessen.
+
+**Auskunft des Betreibers (vollstaendig):** An GPIO2/D0 haengt **nur der
+10k-Pull-up**, sonst nichts. Die microSD steckt beim Flashen. Und: **das
+WROVER-Modul geht in dieser Platine nicht in den Download-Modus, es muss zum
+Flashen aus dem Board genommen werden; das WROOM-Modul geht in-circuit.**
+
+Daraus ergibt sich eine geschlossene Erklaerung, in der beide Beobachtungen
+dieselbe Leitung betreffen:
+
+| Modul | microSD-Zustand | DAT0/GPIO2 beim Reset | Folge |
+|---|---|---|---|
+| WROVER | Karte laeuft, DAT0 wird freigegeben | 10k-Pull-up zieht **HIGH** | SD laeuft - aber Download-Modus blockiert (Doku: "unable to enter UART download mode if you correctly connect the pullup of SD on GPIO2") |
+| WROOM | Karte haengt **busy** und haelt DAT0 auf LOW | **LOW** | SD faellt aus (Host sieht busy, sendet nichts, 0x107) - Download-Modus funktioniert |
+
+Der Pull-up auf D0 ist also gleichzeitig Voraussetzung fuer die SD-Funktion und
+Hindernis fuer den Download-Modus. Die Doku nennt dafuer die Loesungen:
+waehrend des Downloads GPIO2 herunterziehen (WROVER-KIT v3 hat dafuer eine
+eigene Schaltung; als Behelf GPIO0 und GPIO2 mit einem Jumper verbinden) - ein
+DAUERHAFTER Pulldown auf D0 ist dagegen nicht zulaessig ("pulldown will
+interfere with D0 signals and must be removed").
+
+**Praktische Konsequenz:** Zum Flashen des WROVER genuegt vermutlich schon das
+Herausnehmen der microSD; erst wenn das nicht reicht, das Modul aus dem Sockel.
+
+**Offen bleibt der eigentliche Defekt:** Warum haengt die Karte beim WROOM-Modul
+in einem busy-Zustand fest (DAT0 dauerhaft LOW), waehrend sie beim WROVER
+normal arbeitet? Das ist modul- bzw. kontaktspezifisch und der verbleibende
+Punkt dieser Messreihe. Das Kommando `sdpins` (0.9.51 ff.) treibt GPIO14/15/2
+als Ausgange und liest sie zurueck - bleibt der Ruecklesewert bei "high" auf 0,
+haelt etwas D0 fest.
+
+> The MTDI strapping pin is incompatible with DAT2 line pull-up by default when
+> the code flash is 3.3V.
+>
+> | Module | Flash voltage | DAT2 connections |
+> |---|---|---|
+> | Module | Flash voltage | DAT2 connections |
+> |---|---|---|
+> | Wroom-32 Series | 3.3V | Internal PD, weakly pulled down |
+> | Wrover | 1.8V | Internal PU, pullup suggested |
+>
+> On boards which use the internal regulator and a 3.3V flash chip, **GPIO12
+> must be low at reset. This is incompatible with SD card operation.**
+
+### 12p. Hintergrund: DAT2 = GPIO12 = MTDI (nicht die Ursache hier)
+
+Unabhaengig von 12o gilt weiter: **DAT2 der SD-Karte ist beim ESP32 gleichzeitig
+MTDI (GPIO12)** und legt beim Reset die Flash-Spannung VDD_SDIO fest. Die
+WROVER-Module haben 1,8-V-Flash und einen internen Pull-up auf GPIO12, die
+WROOM-32-Module 3,3-V-Flash und einen internen Pulldown - deshalb kann dieselbe
+Leitung nicht gleichzeitig SD-DAT2-Pull-up und korrekter Flash-Strapping sein
+("incompatible with SD card operation"). Wer DAT2 verdrahtet, muss das
+beachten; im 1-Bit-Modus wird DAT2 nicht gebraucht.
+
+Belegstelle mit identischem Symptom ("flashing via serial is not possible until
+SD card is removed", Loesung dort: Flash-Spannungs-eFuse brennen - fuer dieses
+Board ungeeignet, weil das WROVER-Modul 1,8-V-Flash hat):
+https://www.olimex.com/forum/index.php?topic=9267.0
+**Konsequenz fuer unseren Fehler:** Die Karte bekam auf DAT2 den falschen Pegel
+und antwortete deshalb nie (`response_index = 0`) und ging auf busy
+(`data_busy = 1`, Abschnitt 12k/12m). Die Kette aus 12m - Karte antwortet nicht,
+Host sendet daher kein Kommando, 0x107 - ist damit erklaert.
+
+### 12q. GEMESSEN: D0 (GPIO2) wird auf LOW gezogen (0.9.53, WROOM, Karte draussen)
+
+`sdpins` liest jede SD-Leitung dreimal: frei, mit internem Pull-up, mit internem
+Pull-down. Ergebnis auf dem WROOM (Karte herausgezogen, also ohne Karte):
+
+```
+GPIO2  D0 : frei=0, mit Pull-up=0, mit Pull-down=0  -> extern auf LOW gezogen (staerker als 45k)
+GPIO14 CLK: frei=1, mit Pull-up=1, mit Pull-down=1  -> extern auf HIGH gezogen (stark)
+GPIO15 CMD: frei=1, mit Pull-up=1, mit Pull-down=1  -> extern auf HIGH gezogen (stark)
+GPIO4  DAT1: folgt den internen Pulls (extern nichts)
+GPIO12 DAT2: folgt den internen Pulls (extern nichts)
+GPIO13 DAT3: frei=0  (nicht verdrahtet)
+```
+
+Auswertung:
+
+- **CLK und CMD** liegen auch gegen den internen Pull-DOWN auf HIGH -> die
+  externen Pull-ups (10k nach 3,3 V) sind vorhanden und kraeftig, wie erwartet.
+- **D0 liegt auch gegen den internen Pull-UP auf LOW** -> dort zieht etwas
+  **nach GND**, und zwar staerker als die internen ca. 45k. Und das **ohne
+  Karte**: es ist also NICHT die Karte.
+- DAT1/DAT2 floaten (nichts angeschlossen), DAT3/GPIO13 ist laut Betreiber nicht
+  verdrahtet (misst frei=0).
+
+**Damit ist der SD-Ausfall vollstaendig erklaert:** Der Host liest DAT0
+dauerhaft als busy (`data_busy = 1`), und die CIU sendet deshalb kein Kommando -
+`start_command` bleibt 1, `response_index = 0`, Ergebnis `0x107` (12k/12m). Der
+Fehler liegt in der **D0-Leitung**, nicht in Karte, Takt, Gate, PLL, PSRAM oder
+Firmware.
+
+**Noch offen - und in einem Zug entscheidbar:** zieht die **Platine** oder das
+**WROOM-Modul**? Derselbe `sdpins`-Test auf dem WROVER (gleiches Board, gleiche
+Karte, nur Modul getauscht) trennt das:
+
+- D0 auch dort LOW  -> Platinenfehler auf der D0-Leitung
+- D0 dort HIGH      -> das WROOM-Modul zieht D0 herunter (Modulfehler)
+
+### 12r. Alle RS232-Leitungen durchgemessen - keine geht auf IO2 (0.9.55)
+
+Verdacht des Betreibers (und berechtigt, weil er alle bisherigen Messungen
+entwertet haette): zieht vielleicht DTR oder eine andere Leitung des
+USB-Seriell-Wandlers den Pin IO2 herunter?
+
+Dafuer gibt es jetzt ein systematisches Werkzeug:
+
+- **Firmware `scanpins`** (main/cmd_reg.c): liest die Pegel ALLER GPIOs direkt
+  aus `GPIO_IN_REG`/`GPIO_IN1_REG` - ohne `gpio_config()`, weil das Pins
+  verweigert, die ein Peripherietreiber beansprucht hat. Genau das war im ersten
+  Versuch der Fehler: GPIO0, GPIO2, GPIO4 und GPIO5 fehlten im Ergebnis.
+- **Host `D:\Coding\ESP-IDF\.tmp\rs232_scan.ps1`**: variiert DTR, RTS und TXD
+  (ueber gesendete 0x00/0xFF-Bytes), ruft jeweils `scanpins` auf und vergleicht.
+
+Ergebnis (WROOM, Karte gesteckt, zwei Boards):
+
+```
+DTR=0 RTS=0:  GPIO0=1  GPIO2=0  GPIO4=1  GPIO5=1  GPIO12=1  GPIO13=0  GPIO14=1  GPIO15=1
+DTR=1 RTS=0:  GPIO0=0  GPIO2=0  GPIO4=1  GPIO5=1  GPIO12=1  GPIO13=0  GPIO14=1  GPIO15=1
+TXD=0:        GPIO0=1  GPIO2=0  ...
+RTS=1:        keine Antwort (Reset)
+```
+
+| RS232-Leitung | ESP32-Pin | Nachweis |
+|---|---|---|
+| DTR | **GPIO0** | GPIO0 folgt DTR (1 -> 0) |
+| RTS | **EN** (Reset) | bei RTS=1 antwortet die Anwendung nicht mehr |
+| TXD/RXD | GPIO3/GPIO1 (UART0) | die Konsole laeuft darueber |
+| DTR/RTS/TXD auf IO2 | **nein** | GPIO2 bleibt in allen Zustaenden 0 |
+
+**Damit ist ausgeschlossen, dass der Messaufbau den LOW-Pegel auf D0 macht.**
+Der Pegel kommt vom Board oder vom Modul; er ist unabhaengig von Karte,
+seriellem Port, DTR und RTS.
+
+**Verbleibende Klaerung "Board oder Modul":**
+1. Multimeter, Board ohne Modul: Widerstand vom D0-Pad (bzw. DAT0-Kontakt des
+   Slots) nach GND. ~10k -> Platine zieht herunter; hochohmig -> Modul.
+2. WROVER in dasselbe Board stecken und `sdpins` aufrufen: D0 dort HIGH -> das
+   WROOM-Modul zieht D0 herunter.
+
+### 12s. GELOEST: D0-Pull-up hergestellt -> SD laeuft auch auf dem WROOM (0.9.55)
+
+Der Betreiber hat die Platine umgebaut. Danach, mit demselben WROOM-Modul und
+demselben Build (0.9.55, NoPsram, Flash 40 MHz, SD-Takt 4000 kHz):
+
+```
+I (1010) SD_CARD: Card detect (GPIO34): card inserted
+I (1011) SD_CARD: SDMMC-Versuch 1/3 (max 4000 kHz)
+I (1114) SD_CARD: mounted at /sdcard (SDMMC 1 Bit)      <- 103 ms, wie auf dem WROVER
+Name: USDU1   Type: SDHC
+```
+
+Und `sdpins` zeigt die Ursache im Vorher/Nachher-Vergleich eindeutig:
+
+| Messung | vorher (Original) | nachher (umgebaut) |
+|---|---|---|
+| GPIO2 D0 als Eingang | 0 | **1** |
+| D0 frei / Pull-up / Pull-down | 0 / 0 / 0 | **1 / 1 / 1** |
+| Bewertung durch `sdpins` | "extern auf LOW gezogen (staerker als 45k)" | **"extern auf HIGH gezogen (stark)"** |
+| SDMMC-Versuch 1 | 0x107, Timeout 1 s | **gemountet in 103 ms** |
+
+CLK (GPIO14) und CMD (GPIO15) waren die ganze Zeit unauffaellig (1/1/1); nur D0
+war falsch. **Damit ist die Ursache bestaetigt und behoben:**
+
+> Auf der D0-Leitung (GPIO2) fehlte der Pull-up nach 3,3 V. Damit las der
+> SDMMC-Host DAT0 dauerhaft als "busy", die CIU sendete kein Kommando
+> (`start_command` blieb 1, `response_index = 0`) und der Mount lief in den
+> 1-s-Timeout `0x107`. Weil GPIO2 gleichzeitig der Boot-Strapping-Pin ist,
+> erklärte derselbe Fehler auch das unterschiedliche Flaschverhalten von WROOM
+> (GPIO2 LOW -> Download-Modus geht) und WROVER (GPIO2 HIGH -> Download-Modus
+> blockiert, Modul musste heraus).
+
+**Lehre fuer die naechste Platine:** Der Pull-up auf D0 ist nicht optional
+(Doku: "CMD and DATA lines D0-D3 should be pulled up by 50KOhm even in 1-bit
+mode"). Und weil GPIO2 ein Strapping-Pin ist, muss beim Bestuecken geprueft
+werden, dass dieser Pull-up nur nach dem Reset wirkt bzw. dass der
+Download-Modus ueber den GPIO0-GPIO2-Jumper oder eine eigene Schaltung
+sichergestellt ist (wie beim WROVER-KIT v3).
+
+### 12t. Warnung: `sdpins` NICHT bei gemounteter Karte ausfuehren
+
+`sd_ls` meldete in der 0.9.55-Sitzung "0 entries in /sdcard", obwohl die Karte
+vollstaendig ist. Ursache war der Messaufbau: `sdpins` treibt GPIO14/15/2 als
+Ausgaenge low/high - auf denselben Leitungen, auf denen die gemountete Karte
+gerade arbeitet. Der Verzeichniszustand des FATFS ist danach hin.
+
+Mit 0.9.41 (ohne diesen Eingriff) listet dieselbe Karte korrekt:
+
+```
+  UNICORN_11704_x14_b17.jic
+  test.mp3
+  test2.mp3
+73 entries in /sdcard
+```
+
+**Regel:** `sdpins`, `scanpins` und `sd_mount_spi` nur benutzen, solange keine
+Karte gemountet ist (`sd_unmount` vorher), sonst verfaelscht man sich das
+Dateisystem.
+
+### 12u. Mischbetrieb auf dem umgebauten WROOM verifiziert (0.9.41)
+
+Nach dem Hardware-Umbau (D0-Pull-up, Abschnitt 12s) und mit dem verifizierten
+Audio-Stand 0.9.41 laeuft die Kernanforderung - "der I2S-Sound von der Vampire
+muss immer zu hoeren sein, beim Abspielen von Dateien wird gemischt" - auf dem
+WROOM:
+
+**Verbindung und Aufbau**
+
+```
+I (1254) STREAM_PROC: I2S-Zweig: 60000 Hz/32 Bit -> 48000 Hz/16 Bit
+I (1293) STREAM_PROC: Mischer: 48000 Hz, 16 Bit, 2 ch, 2 Quellen (I2S 1.0, Datei 0.7)
+I (213620) BT_AUD_A2D_SRC: A2DP connection state: Connected, addr[66:fe:5a:e3:41:df]
+I (213632) BT_AUD_A2D_SRC: A2DP connection handle saved: 65, audio_mtu: 703
+I (267511) BT_AUD_A2D_SRC: A2DP audio state: Started (source)
+I (267537) BT_AUD_A2D_SRC:   sample_rate: 44100, ch_mode: 2, bitpool: 53
+```
+
+**WAV (test_tone_48k.wav, 288 044 Byte)**
+
+```
+Datei -> Mischer: test_tone_48k.wav
+  (Vampire-Ton laeuft weiter und wird dazugemischt)
+I LIN_RESAMPLE: 48000 Hz, 16 Bit, 1 ch -> Ausgang 44100 Hz, 16 Bit, 2 ch
+I STREAM_PROC: [a2dp source pipeline] state => RUNNING(3)
+CPU-Last: Kern0 46% / Kern1 68%  ->  Kern0 35% / Kern1 64%
+```
+
+**MP3 (test2.mp3, 75 531 Byte)**
+
+```
+I STREAM_PROC: Decoder auf Dateityp 0x2033504d eingestellt (file://sdcard/test2.mp3)
+I LIN_RESAMPLE: 44100 Hz, 16 Bit, 2 ch -> Ausgang 44100 Hz, 16 Bit, 2 ch
+I STREAM_PROC: [a2dp source pipeline] state => RUNNING(3)
+CPU-Last: Kern0 74% / Kern1 74% (waehrend des Decodierens), danach 35% / 64%
+keine Fehlerzeile im Log
+```
+
+**Ergebnis (gehoert, nicht nur gemessen):** Der 440-Hz-Ton kommt aus der
+Soundbar, die V4 bleibt dabei **lueckenlos** zu hoeren; dasselbe fuer die MP3.
+Beim *ersten* Start des Streams (`start_media`) wird der SBC-Encoder
+konfiguriert (44100 Hz) - in diesem Moment setzt der BT-Ausgang einmalig kurz
+aus. Das ist der Stream-Start, nicht das Mischen; im laufenden Betrieb
+(Titelwechsel per `playfile`) bleibt der V4-Sound durchgehend.
+
+Damit ist die Kette **SD -> Decoder -> Mischer -> SBC -> A2DP** auf dem WROOM
+vollstaendig belegt, der Datei-Zweig laeuft parallel zum I2S-Zweig der Vampire.
+
+## 13. Equalizer: Einbau und gemessene Kosten (0.9.56)
+
+### 13a. Was eingebaut wurde
+
+- **Element:** `aud_eq` aus `esp_gmf_audio` (baut auf `esp_ae_eq` aus
+  `esp_audio_effects` auf). Filtertypen: High-Pass, Low-Pass, Peak, High-Shelf,
+  Low-Shelf; 16/24/32 Bit; Parameter zur Laufzeit aenderbar.
+- **Ort:** in der Mischer-Pipeline **zwischen `aud_mixer` und `aud_enc_mix`**
+  (`stream_proc.c`: `{"aud_mixer", "aud_eq", "aud_enc_mix"}`). Eine Instanz
+  formt beide Quellen (Vampire und Datei) - das ist die guenstigste Variante,
+  denn der EQ laeuft auf **Kern 1**, wo schon Mischer, Resampler, SBC-Encoder
+  und der BT-Sende-Task liegen.
+- **Bandzahl:** fest **10** (`MIXER_EQ_BANDS`), alle mit 0 dB = flach.
+  Bass-Shelf 100 Hz, acht Peak-Baender (200 Hz ... 10 kHz), Hoehen-Shelf 12 kHz.
+- **CLI:** `eq` (auflisten), `eq bands <0..10>` (erste N Baender aktiv),
+  `eq set <idx> <typ> <fc> <q> <gain>`.
+- **Abtastrate:** das Element passt sich selbst an - `eq_received_event_handler`
+  in `esp_gmf_eq.c` setzt bei geaenderter Rate `need_reopen` und oeffnet den EQ
+  mit der neuen Rate neu (unsere Kette laeuft je nach Aushandlung mit 44100 oder
+  48000 Hz).
+
+### 13b. Gemessene Kosten
+
+Vorher (0.9.41, gleicher Aufbau): Heap 78 284 Byte frei, groesster Block
+32 768 Byte. Nach dem Einbau (0.9.56): **75 508 Byte frei, groesster Block
+34 816 Byte** -> der EQ kostet rund **2,8 KB**.
+
+CPU-Messreihe (0.9.56, WROOM, `test2.mp3` wiederholt abgespielt, I2S-Eingang der
+Vampire aktiv, A2DP-Stream gestartet, 48 kHz Stereo s16). Je Stufe die
+Spitzenwerte der 5-s-Mittelwerte:
+
+| Baender | Kern0 (Dekoder) | Kern1 (Mixer+EQ+SBC+BT) |
+|---|---|---|
+| 0 | 70 % | 60 % |
+| 1 | 71 % | 61 % |
+| 2 | 71 % | 63 % |
+| 5 | 70 % | 65 % |
+| 10 | 70 % | **70 %** |
+
+**Ergebnis:** rund **1 % CPU je Band** auf Kern 1; 10 Baender kosten also etwa
+**+10 %**. Zwei Dinge sind dabei wichtig:
+
+1. Die Doku-Formel `(rate/8000) * kanaele * baender * base_load` mit
+   `base_load = 0,09 %` (s16) ergibt fuer 48 kHz Stereo 1,08 % je Band - **auf
+   einem ESP32-S3**. Der ESP32 (LX6, ohne Vektor-SIMD) liegt mit ~1 % je Band
+   praktisch gleichauf; meine Vorabschaetzung von 2-3 % je Band war zu
+   pessimistisch.
+2. **Dekoder und EQ liegen auf verschiedenen Kernen** (Kern 0 bzw. Kern 1) und
+   addieren sich daher nicht. Im haertesten gemessenen Fall (MP3-Dekoder +
+   I2S + EQ mit 10 Baendern + SBC + A2DP) bleiben auf **beiden** Kernen rund
+   30 % Reserve.
+
+Damit sind 10 Baender auf diesem Chip gut vertretbar.
+
+### 13c. Offener Punkt: Start-Reihenfolge des Datei-Zweigs
+
+Beim **ersten** `playfile` nach `start_media` ist der Datei-Zweig einmal
+abgestuerzt:
+
+```
+W ESP_GMF_ASMP_DEC: Not enough memory for out, need:4608, old: 1024, new: 4608
+E ESP_GMF_PORT: esp_gmf_port.c:284 (esp_gmf_port_acquire_out): Got NULL Pointer
+E LIN_RESAMPLE: lin_resample_process(386): Failed to acquire out, ret: -1
+E ESP_GMF_TASK: Job failed[...aud_lin_resample_file_proc], ret:-1
+I STREAM_PROC: [a2dp source pipeline] state => ERROR(7)
+```
+
+Der Resampler bekam Daten, bevor sein Ausgangsport am Ringpuffer hing - ein
+Start-Reihenfolge-Problem, das mit dem zusaetzlichen Element in der
+Mischer-Pipeline auftritt (in 0.9.55 lief dieselbe Folge fehlerfrei). Im
+zweiten Durchlauf (15 `playfile`-Aufrufe) trat es **nicht** wieder auf, ist also
+selten und haengt am ersten Aufbau.
+
+**Zu beheben:** den Datei-Zweig erst starten, wenn die Mischer-Pipeline
+`RUNNING` meldet (bzw. bei `ERROR` einmal neu anstoßen).
+
+### 13d. Hoerprobe: der EQ wirkt deutlich (0.9.56)
+
+Jeweils eine Wiedergabe von `test2.mp3` pro Einstellung, derselbe Aufbau wie in
+13b (V4 laeuft ueber I2S mit, Soundbar als A2DP-Empfaenger):
+
+| Einstellung | Kommando | Ergebnis |
+|---|---|---|
+| flach (Referenz) | `eq bands 0` | normal |
+| **nur Bass** | `eq set 0 5 250 0.7 15` + `eq bands 1` | **deutlich** |
+| **nur Hoehen** | `eq set 9 4 4000 0.7 15` + `eq bands 10` | **deutlich** |
+| beides | beide Baender +15 dB | deutlich |
+
+**Wichtig fuer die Praxis:** Mit den urspruenglich voreingestellten Baendern
+(Bass-Shelf **100 Hz**, Hoehen-Shelf **8 kHz**) war der Unterschied nur schwach
+zu hoeren - 100 Hz liegt unter dem, was eine Soundbar wiedergibt, und 8 kHz am
+oberen Hoerrand. Erst **250 Hz** bzw. **4 kHz** mit **+15 dB** waren klar
+hoerbar. Die Standardbaender aus 13a sind deshalb als *Ausgangspunkt* gedacht;
+wirksame Hoerproben brauchen tiefere Hoehen- und hoehere Bassfrequenzen.
+
+Damit ist der EQ vollstaendig belegt: eingebaut, in der Kette, messbar
+(~1 % CPU je Band) und **hoerbar**.

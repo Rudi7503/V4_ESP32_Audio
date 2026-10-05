@@ -103,3 +103,40 @@ void i2s2bt_set_mixer_wait(int prefill_ms, int transit_ms);
  */
 void i2s2bt_get_mixer_wait(int *prefill_ms, int *transit_ms);
 
+/**
+ * Bandzahl des Equalizers hinter dem Mischer (0.9.56).
+ *
+ * Fest 10 - die Baender werden zur Laufzeit einzeln zu- und abgeschaltet
+ * ("eq bands N"), damit die CPU-Kosten je Band messbar sind. Der EQ passt sich
+ * der Abtastrate des Streams selbst an (esp_gmf_eq.c: eq_received_event_handler
+ * setzt need_reopen und oeffnet den EQ mit der neuen Rate neu).
+ */
+#define MIXER_EQ_BANDS   10
+
+/**
+ * @brief  Erste N Baender des Equalizers aktivieren, den Rest abschalten
+ *
+ * @param[in]  n  0 = alles aus (Durchlauf), 1..MIXER_EQ_BANDS
+ *
+ * @return   die gesetzte Bandzahl oder -1 (EQ nicht gefunden / nicht bereit)
+ */
+int stream_proc_eq_set_bands(int n);
+
+/**
+ * @brief  Ein Band des Equalizers einstellen
+ *
+ * @param[in]  idx   Bandindex 0..MIXER_EQ_BANDS-1
+ * @param[in]  typ   1 = High-Pass, 2 = Low-Pass, 3 = Peak, 4 = High-Shelf, 5 = Low-Shelf
+ * @param[in]  fc    Mitten-/Grenzfrequenz in Hz
+ * @param[in]  q     Guete (0,1 .. 20)
+ * @param[in]  gain  Verstaerkung in dB (-15 .. 15, nur Shelf/Peak)
+ *
+ * @return   0 bei Erfolg, -1 sonst
+ */
+int stream_proc_eq_set(int idx, int typ, unsigned fc, float q, float gain);
+
+/**
+ * @brief  Alle Baender des Equalizers ausgeben (Typ, fc, Q, Gain, aktiv)
+ */
+void stream_proc_eq_list(void);
+

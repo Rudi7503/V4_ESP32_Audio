@@ -30,6 +30,7 @@
 #include "esp_gmf_audio_dec.h"
 #include "esp_gmf_audio_enc.h"
 #include "esp_gmf_mixer.h"
+#include "esp_gmf_eq.h"
 
 // GMF-IO-Typen
 #include "esp_gmf_io_file.h"
@@ -37,11 +38,32 @@
 
 #include "i2s_input.h"
 #include "linear_resample.h"
+#include "stream_proc.h"
 
 static const char *TAG = "POOL_INIT";
 
 /* Ausgangsrate des Mischers; wird beim Stream-Start auf die A2DP-Rate gesetzt. */
 #define MIXER_RATE_HZ   48000
+
+/*
+ * Standardbaender des Equalizers (alle 0 dB = flach).
+ *
+ * Reihenfolge und Frequenzen sind so gewaehlt, dass sie auch bei 44100 Hz
+ * gueltig sind (fc < 22050 Hz) und den hoerbaren Bereich abdecken:
+ * Bass-Shelf, acht Peak-Baender, Hoehen-Shelf.
+ */
+static esp_ae_eq_filter_para_t s_eq_bands[MIXER_EQ_BANDS] = {
+    { ESP_AE_EQ_FILTER_LOW_SHELF,    100, 0.7f, 0.0f },   /* 0 Bass        */
+    { ESP_AE_EQ_FILTER_PEAK,         200, 1.0f, 0.0f },   /* 1            */
+    { ESP_AE_EQ_FILTER_PEAK,         400, 1.0f, 0.0f },   /* 2            */
+    { ESP_AE_EQ_FILTER_PEAK,         800, 1.0f, 0.0f },   /* 3            */
+    { ESP_AE_EQ_FILTER_PEAK,        1500, 1.0f, 0.0f },   /* 4            */
+    { ESP_AE_EQ_FILTER_PEAK,        3000, 1.0f, 0.0f },   /* 5            */
+    { ESP_AE_EQ_FILTER_PEAK,        5000, 1.0f, 0.0f },   /* 6            */
+    { ESP_AE_EQ_FILTER_PEAK,        7000, 1.0f, 0.0f },   /* 7            */
+    { ESP_AE_EQ_FILTER_PEAK,       10000, 1.0f, 0.0f },   /* 8            */
+    { ESP_AE_EQ_FILTER_HIGH_SHELF, 12000, 0.7f, 0.0f },   /* 9 Hoehen      */
+};
 
 esp_gmf_err_t pool_reg(esp_gmf_pool_handle_t pool)
 {
@@ -119,6 +141,28 @@ esp_gmf_err_t pool_reg(esp_gmf_pool_handle_t pool)
     ret = esp_gmf_pool_register_element(pool, element, "aud_enc_mix");
     ESP_GMF_RET_ON_ERROR(TAG, ret, return ret, "Failed to register mixer encoder");
     ESP_LOGD(TAG, "Registered: aud_enc_mix");
+
+    /*
+     * Equalizer hinter dem Mischer (0.9.56).
+     *
+     * EINE Instanz formt beide Quellen (Vampire + Datei) - das ist die
+     * guenstigste Variante, weil der EQ auf Kern 1 laeuft, wo schon Mischer,
+     * Resampler, SBC-Encoder und der BT-Sende-Task liegen.
+     *
+     * Alle Baender starten mit 0 dB, also flach. Die Messreihe schaltet sie
+     * einzeln zu (CLI "eq bands N"), um die CPU-Kosten je Band zu messen.
+     * Filtertypen: ein Low-Shelf fuer den Bass, acht Peak-Baender, ein
+     * High-Shelf fuer die Hoehen - die fc-Werte muessen unter der halben
+     * Abtastrate liegen (bei 44100 Hz also < 22050 Hz).
+     */
+    esp_ae_eq_cfg_t eq_cfg = DEFAULT_ESP_GMF_EQ_CONFIG();
+    eq_cfg.filter_num = MIXER_EQ_BANDS;
+    eq_cfg.para = s_eq_bands;
+    ret = esp_gmf_eq_init(&eq_cfg, &element);
+    ESP_GMF_RET_ON_ERROR(TAG, ret, return ret, "Failed to init equalizer");
+    ret = esp_gmf_pool_register_element(pool, element, "aud_eq");
+    ESP_GMF_RET_ON_ERROR(TAG, ret, return ret, "Failed to register equalizer");
+    ESP_LOGI(TAG, "Registered: aud_eq (%d Baender, alle 0 dB)", MIXER_EQ_BANDS);
 
     /* Datei-IO als Leser (SD-Karte). 4 KB Cache: ohne Cache geht jeder
      * 512-Byte-Lesevorgang direkt auf die Karte und der Datei-Zweig schafft die

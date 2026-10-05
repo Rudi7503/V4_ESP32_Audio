@@ -34,6 +34,7 @@
 #include "esp_gmf_bit_cvt.h"
 #include "esp_gmf_ch_cvt.h"
 #include "esp_gmf_mixer.h"
+#include "esp_gmf_eq.h"
 #include "esp_gmf_new_databus.h"
 #include "esp_gmf_oal_mem.h"
 #include "esp_gmf_port.h"
@@ -1540,7 +1541,11 @@ static esp_gmf_err_t setup_pipeline_mixer(esp_gmf_pool_handle_t pool)
      * Sie belegten also nur Port-Puffer. Der Encoder bekommt seine Parameter
      * ohnehin in i2s2bt_set_stream() gesetzt.
      */
-    const char *name[] = {"aud_mixer", "aud_enc_mix"};
+    /*
+     * Seit 0.9.56 haengt der Equalizer (aud_eq) zwischen Mischer und Encoder -
+     * eine Instanz formt beide Quellen (Vampire und Datei), siehe pool_reg.c.
+     */
+    const char *name[] = {"aud_mixer", "aud_eq", "aud_enc_mix"};
     esp_gmf_err_t ret = esp_gmf_pool_new_pipeline(pool, NULL, name, sizeof(name) / sizeof(char *),
                                                   "io_bt", &mixer_pipe);
     if (ret != ESP_GMF_ERR_OK || mixer_pipe == NULL) {
@@ -2148,6 +2153,101 @@ void i2s2bt_get_mixer_wait(int *prefill_ms, int *transit_ms)
     }
     if (transit_ms != NULL) {
         *transit_ms = s_mixer_transit_ms;
+    }
+}
+
+/*--------------------------------------------------------------------
+ * Equalizer (0.9.56)
+ *
+ * Der EQ haengt in der Mischer-Pipeline zwischen aud_mixer und aud_enc_mix,
+ * formt also beide Quellen mit einer Instanz. Die Bandzahl ist fest
+ * (MIXER_EQ_BANDS), aktiviert werden die Baender 0..N-1 - so laesst sich der
+ * Einfluss einzelner Baender auf die CPU-Last messen, ohne die Pipeline neu
+ * aufzubauen.
+ *------------------------------------------------------------------*/
+
+/** EQ-Element aus der Mischer-Pipeline holen (NULL, wenn nicht vorhanden) */
+static esp_gmf_element_handle_t eq_element(void)
+{
+    if (mixer_pipe == NULL) {
+        ESP_LOGW(TAG, "EQ: Mischer-Pipeline gibt es noch nicht");
+        return NULL;
+    }
+    esp_gmf_element_handle_t eq = NULL;
+    if (esp_gmf_pipeline_get_el_by_name(mixer_pipe, "aud_eq", &eq) != ESP_GMF_ERR_OK || eq == NULL) {
+        ESP_LOGW(TAG, "EQ: Element aud_eq nicht in der Pipeline");
+        return NULL;
+    }
+    return eq;
+}
+
+int stream_proc_eq_set_bands(int n)
+{
+    if (n < 0 || n > MIXER_EQ_BANDS) {
+        ESP_LOGW(TAG, "EQ: Bandzahl %d ungueltig (0..%d)", n, MIXER_EQ_BANDS);
+        return -1;
+    }
+    esp_gmf_element_handle_t eq = eq_element();
+    if (eq == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < MIXER_EQ_BANDS; i++) {
+        esp_gmf_err_t ret = esp_gmf_eq_enable_filter(eq, (uint8_t)i, i < n);
+        if (ret != ESP_GMF_ERR_OK) {
+            ESP_LOGW(TAG, "EQ: Band %d konnte nicht geschaltet werden: %d", i, ret);
+            return -1;
+        }
+    }
+    ESP_LOGI(TAG, "EQ: %d von %d Baendern aktiv", n, MIXER_EQ_BANDS);
+    return n;
+}
+
+int stream_proc_eq_set(int idx, int typ, unsigned fc, float q, float gain)
+{
+    if (idx < 0 || idx >= MIXER_EQ_BANDS) {
+        ESP_LOGW(TAG, "EQ: Bandindex %d ungueltig (0..%d)", idx, MIXER_EQ_BANDS - 1);
+        return -1;
+    }
+    if (typ < ESP_AE_EQ_FILTER_HIGH_PASS || typ >= ESP_AE_EQ_FILTER_MAX) {
+        ESP_LOGW(TAG, "EQ: Filtertyp %d ungueltig (1..5)", typ);
+        return -1;
+    }
+    esp_gmf_element_handle_t eq = eq_element();
+    if (eq == NULL) {
+        return -1;
+    }
+    esp_ae_eq_filter_para_t para = {
+        .filter_type = (esp_ae_eq_filter_type_t)typ,
+        .fc          = fc,
+        .q           = q,
+        .gain        = gain,
+    };
+    esp_gmf_err_t ret = esp_gmf_eq_set_para(eq, (uint8_t)idx, &para);
+    if (ret != ESP_GMF_ERR_OK) {
+        ESP_LOGW(TAG, "EQ: Band %d nicht einstellbar: %d", idx, ret);
+        return -1;
+    }
+    ESP_LOGI(TAG, "EQ: Band %d = Typ %d, fc %u Hz, Q %.2f, Gain %.1f dB", idx, typ, fc, q, gain);
+    return 0;
+}
+
+void stream_proc_eq_list(void)
+{
+    esp_gmf_element_handle_t eq = eq_element();
+    if (eq == NULL) {
+        return;
+    }
+    static const char *typen[] = { "ungueltig", "HighPass", "LowPass", "Peak", "HighShelf", "LowShelf" };
+    for (int i = 0; i < MIXER_EQ_BANDS; i++) {
+        esp_ae_eq_filter_para_t para = {0};
+        if (esp_gmf_eq_get_para(eq, (uint8_t)i, &para) != ESP_GMF_ERR_OK) {
+            printf("  Band %2d: nicht lesbar\n", i);
+            continue;
+        }
+        const char *tn = (para.filter_type > 0 && para.filter_type < ESP_AE_EQ_FILTER_MAX)
+                         ? typen[para.filter_type] : "?";
+        printf("  Band %2d: %-9s fc %5u Hz  Q %4.2f  Gain %+5.1f dB\n",
+               i, tn, (unsigned)para.fc, para.q, para.gain);
     }
 }
 
