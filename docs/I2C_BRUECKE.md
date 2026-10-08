@@ -305,3 +305,11 @@ keiner der beiden Seiten.
   `start_media` kann das erste `playfile` einmal mit "Got NULL Pointer" im
   Resampler-Ausgangsport scheitern. Der Datei-Zweig sollte erst starten, wenn die
   Mischer-Pipeline `RUNNING` meldet.
+
+---
+
+## 9. Weitere Konsolenbefehle ueber I2C erreichbar machen
+
+Welche Konsolenfunktionen noch keinen Protokollbefehl haben, was ein neuer Befehl
+auf beiden Seiten kostet und in welcher Reihenfolge es sich lohnt, steht in
+[`I2C_ERWEITERN.md`](I2C_ERWEITERN.md).
