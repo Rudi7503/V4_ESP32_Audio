@@ -34,7 +34,7 @@ Aufruf, den es schon gibt, wird nur im Dispatch von `v4_link.c` eingetragen.
 | `start_media` | `MEDIA_START` 0x62 | erledigt (0.9.65) | erledigt (`v4_media_start()`, Konsole startet vor `PLAY_FILE`) |
 | **`stop_media`** | **fehlt** | klein: `esp_bt_audio_media_stop()` | offen - `STOP_PLAY` haelt nur die Datei an, die Uebertragung laeuft weiter (so gewollt: der Vampire-Ton bleibt) |
 | **`eq list/bands/set`** | **fehlt** | klein + **Lese-Rueckweg fehlt** (`stream_proc_eq_list` druckt nur) | neu, mit Nutzlast-Layout |
-| `i2s_media [off]` | fehlt | klein: `i2s2bt_request()` / `i2s2bt_stop()` | neu |
+| `i2s_media [off]` | mit `MEDIA_START` 0x62 erledigt (0.9.67) | erledigt: `media_start_wait()` ruft `i2s2bt_request()` vor dem Streamstart - ohne den Wunsch bindet der Stream die Datei-Pipeline ohne BT-Ausgang, und es ist nichts hoerbar | `stop_media` fehlt weiterhin |
 | `mixer` (lesen/setzen) | fehlt | klein: `i2s2bt_set/get_mixer_wait()` | neu |
 | `vol_set` / `vol_up` / `vol_down` | fehlt | klein: `esp_bt_audio_vol_set_*()` | neu |
 | `play` / `pause` / `next` / `prev` | fehlt | klein: `esp_bt_audio_playback_*()` | neu |

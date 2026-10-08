@@ -15,6 +15,16 @@ Konsole.
 
 ## Stand
 
+**0.9.67** - `MEDIA_START`/`PLAY_FILE` fordern den **I2S-Zweig der Vampire** mit
+an (`i2s2bt_request()` vor dem Streamstart). Ohne das bindet der Stream die
+Datei-Pipeline `local2bt_pipe` an Bluetooth - und die hat seit dem Umbau auf den
+Mischer **keinen Ausgang** mehr: es waere nichts hoerbar gewesen, und der
+Datei-Zweig endete mit ERROR (Mitschnitt `/tmp/v4_traffic.log`). Mit dem Wunsch
+verdrahtet `i2s2bt_set_stream()` den Mischer samt BT-Ausgang und startet den
+I2S-Zweig; Dateien kommen ueber den Mischer dazu. Damit ist der V4-Ton **und**
+die Datei ueber I2C angesteuert auf dem Bluetooth-Geraet. **Noch nicht auf
+Hardware geprueft.**
+
 **0.9.66** - Autoverbindung mit eigener Ablage. Die zuletzt erfolgreich
 verbundene Gegenseite liegt jetzt im eigenen NVS (Namespace `v4bt`, Schluessel
 `peer`; Bluedroid haelt die Bindung zusaetzlich). Beim Start verbindet Bluedroid

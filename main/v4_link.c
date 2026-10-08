@@ -23,6 +23,7 @@
 #include "bt_manager.h"
 #include "sd_fs.h"
 #include "audio_source.h"
+#include "stream_proc.h"
 #include "esp_bt_audio_media.h"
 #include "esp_bt_audio_defs.h"
 #include "esp_timer.h"
@@ -343,6 +344,20 @@ static v4p_status_t media_start_wait(void)
          * nicht ("a2d_media_start is not registered"). */
         return V4P_ST_BAD_STATE;
     }
+
+    /*
+     * ZUERST den I2S-Eingang der Vampire anfordern (0.9.67).
+     *
+     * Ohne diesen Wunsch bindet der Stream die Datei-Pipeline (local2bt_pipe)
+     * an Bluetooth - und die hat seit dem Umbau auf den Mischer GAR KEINEN
+     * Ausgang mehr (stream_proc.c: "Der Datei-Zweig ist ... reiner ZUBRINGER").
+     * Folge: es ist nichts hoerbar, und der Datei-Zweig endet mit ERROR
+     * (Mitschnitt /tmp/v4_traffic.log). Mit dem Wunsch verdrahtet
+     * i2s2bt_set_stream() den Mischer - samt BT-Ausgang - und startet den
+     * I2S-Zweig; Dateien kommen ueber den Mischer dazu. Der Wunsch wird beim
+     * Start des Streams ausgewertet, muss also davor stehen.
+     */
+    i2s2bt_request();
 
     esp_err_t err = esp_bt_audio_media_start(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC, NULL);
     if (err != ESP_OK) {
