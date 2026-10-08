@@ -111,6 +111,14 @@ void i2s2bt_request(void);
 void stream_proc_set_media_autostart(bool on);
 
 /**
+ * @brief Zustand von Ringen, Mischer und Zweigen auf der Konsole ausgeben.
+ *
+ * Nur auf Abruf (Kommando 'bufs'): eine periodische Puffer-Diagnose hat den
+ * Tonpfad selbst gestoert (Commit 9408af7).
+ */
+void stream_proc_buffer_report(void);
+
+/**
  * @brief  Stop the I2S pipeline if it is running
  */
 void i2s2bt_stop(void);

@@ -2340,6 +2340,43 @@ static void stream_proc_autostart_tick(void)
     }
 }
 
+/*
+ * Zustandsbericht fuer die Fehlersuche am Ton (0.9.70).
+ *
+ * NUR auf Abruf, nie periodisch: die alte Puffer-Diagnose lief im Betrieb mit
+ * und verursachte selbst ein "leises Knacken im Sekundentakt" (Commit 9408af7) -
+ * ein Ringpegel-Lesen stoert den Tonpfad. Ein einzelner Aufruf von Hand ist
+ * unkritisch und sagt im Moment des Stotterns mehr als jede Statistik.
+ */
+void stream_proc_buffer_report(void)
+{
+    uint32_t filled = 0, total = 0;
+
+    if (i2s_branch_db != NULL && esp_gmf_db_get_total_size(i2s_branch_db, &total) == ESP_GMF_ERR_OK) {
+        (void)esp_gmf_db_get_filled_size(i2s_branch_db, &filled);
+        printf("I2S-Ring : %5u von %5u Byte (%u %%)\n",
+               (unsigned)filled, (unsigned)total,
+               (unsigned)(total ? (filled * 100u) / total : 0u));
+    } else {
+        printf("I2S-Ring : nicht vorhanden\n");
+    }
+    filled = 0; total = 0;
+    if (file_branch_db != NULL && esp_gmf_db_get_total_size(file_branch_db, &total) == ESP_GMF_ERR_OK) {
+        (void)esp_gmf_db_get_filled_size(file_branch_db, &filled);
+        printf("Datei-Ring: %5u von %5u Byte (%u %%)\n",
+               (unsigned)filled, (unsigned)total,
+               (unsigned)(total ? (filled * 100u) / total : 0u));
+    } else {
+        printf("Datei-Ring: nicht vorhanden\n");
+    }
+    printf("Mischer  : prefill %d ms, transit %d ms\n", s_mixer_prefill_ms, s_mixer_transit_ms);
+    printf("Zweige   : I2S %s, Datei %s, Uebertragung %s, Autostart %s\n",
+           i2s2bt_requested ? "angefordert" : "aus",
+           local2bt_is_playing() ? "spielt" : "aus",
+           bt_mgr_audio_streaming() ? "laeuft" : "haelt",
+           s_media_autostart ? "an" : "aus");
+}
+
 void stream_proc_set_media_autostart(bool on)
 {
     if (s_media_autostart != on) {

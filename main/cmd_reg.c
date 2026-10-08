@@ -901,6 +901,16 @@ static int free_mem(int argc, char **argv)
 }
 
 /** 'tasks' command prints the list of tasks and related information */
+/** 'bufs' - Zustand der Ringpuffer und der Zweige, dann die CPU-Last. */
+static int bufs_info(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    stream_proc_buffer_report();
+    printf("--- CPU-Last ueber 1000 ms ---\n");
+    return esp_gmf_oal_sys_get_real_time_stats(1000, false);
+}
+
 static int tasks_info(int argc, char **argv)
 {
     return esp_gmf_oal_sys_get_real_time_stats(1000, false);
@@ -1179,6 +1189,11 @@ void cli_register_sys()
             .help = "Get the current size of free heap memory",
             .hint = NULL,
             .func = &free_mem,
+        },
+        {
+            .command = "bufs",
+            .help = "Ringpuffer, Mischer, Zweige und CPU-Last",
+            .func = &bufs_info,
         },
         {
             .command = "tasks",
