@@ -229,12 +229,23 @@ static void local2bt_arena_reserve(const char *wer)
 
 static void local2bt_arena_release(void)
 {
+    size_t vorher, nachher;
+
     if (s_local2bt_arena == NULL) {
         return;
     }
+    vorher = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
     heap_caps_free(s_local2bt_arena);
     s_local2bt_arena = NULL;
-    ESP_LOGI(TAG, "Dekoder-Arena freigegeben - liegt jetzt zusammenhaengend bereit");
+    nachher = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    /*
+     * Messzeilen (0.9.79): Der Dekoder scheitert an seiner ersten Anforderung,
+     * obwohl die Arena unmittelbar davor freigegeben wird. Diese zwei Zahlen
+     * zeigen, ob die Freigabe ueberhaupt einen grossen Block erzeugt - und der
+     * Vergleich mit der naechsten Zeile (Dekoderstart) zeigt, wer ihn frisst.
+     */
+    ESP_LOGI(TAG, "Dekoder-Arena freigegeben: groesster Block %u -> %u Byte",
+             (unsigned)vorher, (unsigned)nachher);
 }
 static void local2bt_request_stop(void)
 {
@@ -921,6 +932,8 @@ static void local2bt_play(const char *uri)
     s_local2bt_laeuft = true;
     snprintf(s_local2bt_uri, sizeof(s_local2bt_uri), "%s", uri);
     local2bt_lock_give();
+    ESP_LOGI(TAG, "Nach dem Start des Datei-Zweigs: groesster Block %u Byte",
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 }
 
 /*
