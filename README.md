@@ -15,6 +15,21 @@ Konsole.
 
 ## Stand
 
+**0.9.66** - Autoverbindung mit eigener Ablage. Die zuletzt erfolgreich
+verbundene Gegenseite liegt jetzt im eigenen NVS (Namespace `v4bt`, Schluessel
+`peer`; Bluedroid haelt die Bindung zusaetzlich). Beim Start verbindet Bluedroid
+sie von sich aus (beobachtet rund 5 s nach dem Boot); kommt keine Verbindung
+zustande, versucht `bt_mgr_autoconnect_tick()` es **alle 15 s** erneut, bis eine
+steht. Der Takt kommt aus der 200-ms-Schleife von `stream_proc_task` - **keine
+neue Aufgabe, kein zusaetzlicher Stack** (der DRAM ist knapp), und das
+NVS-Schreiben liegt bewusst nicht im BT-Ereigniskontext (dort nur 3072 Byte
+Stack), sondern im Takt. Ein Verbindungsversuch ohne Ereignis gilt nach 20 s als
+gescheitert, sonst bliebe die Wiederholung stehen. `DISCONNECT` schaltet die
+Autoverbindung ab (die Adresse bleibt fuer den naechsten Start), `FORGET` loescht
+auch unsere Ablage. **Die I2C-Bruecke ist davon unabhaengig** - sie wartet nie
+auf den Verbindungszustand, und der Verbindungsaufbau selbst laeuft asynchron im
+BT-Stack. **Noch nicht auf Hardware geprueft.**
+
 **0.9.65** - Die Vampire kann die A2DP-Uebertragung jetzt selbst starten.
 Der Feldtest am 08.10. (Mitschnitt `/tmp/v4_traffic.log`, 1024 Rahmen, 225
 `PLAY_FILE`) zeigte die Luecke: die Konsole der V4 spielte Dateien ab, aber es

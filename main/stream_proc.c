@@ -19,6 +19,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "i2s_input.h"
+#include "bt_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -2294,6 +2295,13 @@ static void stream_proc_task(void *arg)
             /* Kein Kommando - Gelegenheit, eine anstehende Stopp-Anforderung
              * aus dem Pipeline-Event abzuarbeiten. */
             local2bt_process_stop_request();
+            /*
+             * 0.9.66: Takt fuer die Autoverbindung. Sie laeuft hier und nicht in
+             * der I2C-Bruecke - deren Verkehr ist davon unabhaengig, und dieser
+             * Aufruf kehrt sofort zurueck (der Verbindungsaufbau selbst laeuft
+             * asynchron im BT-Stack).
+             */
+            bt_mgr_autoconnect_tick();
             continue;
         }
 

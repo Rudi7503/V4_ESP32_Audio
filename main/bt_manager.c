@@ -37,6 +37,8 @@
 
 #include "esp_bt_audio_classic.h"
 #include "esp_bt_audio_defs.h"
+#include "esp_timer.h"
+#include "nvs.h"
 
 #include "v4_proto.h"
 #include "bt_manager.h"
@@ -63,6 +65,18 @@ static volatile bool s_suspended;
 static volatile bool s_streaming;
 
 static uint8_t       s_conn_bda[ESP_BD_ADDR_LEN];
+
+/* --- Autoverbindung (0.9.66) ---------------------------------------------- */
+#define BT_MGR_NVS_NAMESPACE  "v4bt"
+#define BT_MGR_NVS_KEY_PEER   "peer"
+
+static uint8_t        s_saved_bda[ESP_BD_ADDR_LEN];
+static bool           s_saved_valid;
+static volatile bool  s_peer_dirty;          /* neu verbunden, noch nicht im NVS */
+static volatile bool  s_want_autoconnect = true;  /* false nach DISCONNECT/FORGET */
+static int64_t        s_last_try_us;
+static int64_t        s_connect_since_us;   /* Beginn des laufenden Versuchs */
+#define BT_MGR_CONNECT_TIMEOUT_MS  20000u   /* Notausstieg, siehe tick() */
 static bool          s_auto_scan;
 static bool          s_initialized;
 
@@ -94,6 +108,59 @@ static bool bda_is_zero(const uint8_t *bda)
 /* Start                                                              */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Gegenstelle im eigenen NVS ablegen bzw. lesen (0.9.66).
+ *
+ * Der Schreibvorgang laeuft NICHT im BT-Ereigniskontext: dort stehen nur
+ * CONFIG_BT_BTC_TASK_STACK_SIZE (3072) Byte zur Verfuegung, und NVS-Schreiben
+ * braucht eigenen Platz. bt_mgr_evt_connection() setzt deshalb nur s_peer_dirty,
+ * geschrieben wird in bt_mgr_autoconnect_tick() (stream_proc_task, 4096 Byte).
+ */
+static void nvs_save_peer(const uint8_t *bda)
+{
+    nvs_handle_t h;
+
+    if (nvs_open(BT_MGR_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGW(TAG, "NVS nicht verfuegbar - Gegenstelle nicht gemerkt");
+        return;
+    }
+    if (nvs_set_blob(h, BT_MGR_NVS_KEY_PEER, bda, ESP_BD_ADDR_LEN) == ESP_OK) {
+        (void)nvs_commit(h);
+    } else {
+        ESP_LOGW(TAG, "Gegenstelle konnte nicht geschrieben werden");
+    }
+    nvs_close(h);
+}
+
+static bool nvs_load_peer(uint8_t *bda)
+{
+    nvs_handle_t h;
+    size_t       len = ESP_BD_ADDR_LEN;
+    bool         ok  = false;
+
+    if (nvs_open(BT_MGR_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    if (nvs_get_blob(h, BT_MGR_NVS_KEY_PEER, bda, &len) == ESP_OK
+        && len == ESP_BD_ADDR_LEN && !bda_is_zero(bda)) {
+        ok = true;
+    }
+    nvs_close(h);
+    return ok;
+}
+
+static void nvs_clear_peer(void)
+{
+    nvs_handle_t h;
+
+    if (nvs_open(BT_MGR_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    (void)nvs_erase_key(h, BT_MGR_NVS_KEY_PEER);
+    (void)nvs_commit(h);
+    nvs_close(h);
+}
+
 esp_err_t bt_mgr_init(void)
 {
     if (s_initialized) {
@@ -103,6 +170,15 @@ esp_err_t bt_mgr_init(void)
     s_dev_count = 0;
     s_scan_gen = 0;
     memset(s_conn_bda, 0, sizeof(s_conn_bda));
+
+    s_saved_valid = nvs_load_peer(s_saved_bda);
+    if (s_saved_valid) {
+        ESP_LOGI(TAG, "gemerkte Gegenstelle %02X:%02X:%02X:%02X:%02X:%02X - "
+                      "Autoverbindung alle %u s",
+                 s_saved_bda[0], s_saved_bda[1], s_saved_bda[2],
+                 s_saved_bda[3], s_saved_bda[4], s_saved_bda[5],
+                 (unsigned)(BT_MGR_RETRY_MS / 1000u));
+    }
 
     ESP_LOGI(TAG, "Geraeteliste bereit (max %d Eintraege), Auto-Scan %s",
              BT_MGR_MAX_DEVICES, s_auto_scan ? "an" : "aus");
@@ -177,6 +253,7 @@ void bt_mgr_evt_connection(bool connected, const uint8_t *bda)
         }
         s_connected = true;
         s_connecting = false;
+        s_connect_since_us = 0;
         s_suspended = false;
 
         /*
@@ -203,6 +280,18 @@ void bt_mgr_evt_connection(bool connected, const uint8_t *bda)
                 s_scan_continuous = false;
             }
         }
+        /*
+         * Erfolgreiche Verbindung merken (0.9.66). Nur den Auftrag setzen - das
+         * NVS-Schreiben erledigt bt_mgr_autoconnect_tick(), weil dieser Kontext
+         * (BT-Ereignis) zu wenig Stack hat.
+         */
+        if (!s_saved_valid || memcmp(s_saved_bda, s_conn_bda, ESP_BD_ADDR_LEN) != 0) {
+            memcpy(s_saved_bda, s_conn_bda, ESP_BD_ADDR_LEN);
+            s_saved_valid = true;
+            s_peer_dirty  = true;
+        }
+        s_want_autoconnect = true;
+
         ESP_LOGI(TAG, "verbunden mit %02X:%02X:%02X:%02X:%02X:%02X",
                  s_conn_bda[0], s_conn_bda[1], s_conn_bda[2],
                  s_conn_bda[3], s_conn_bda[4], s_conn_bda[5]);
@@ -212,6 +301,7 @@ void bt_mgr_evt_connection(bool connected, const uint8_t *bda)
         }
         s_connected = false;
         s_connecting = false;
+        s_connect_since_us = 0;
         s_suspended = false;
         s_streaming = false;
         memset(s_conn_bda, 0, sizeof(s_conn_bda));
@@ -331,7 +421,9 @@ esp_err_t bt_mgr_connect_bda(const uint8_t *bda)
     memcpy(addr, bda, sizeof(addr));
 
     s_connecting = true;
+    s_connect_since_us = esp_timer_get_time();
     s_suspended = false;
+    s_want_autoconnect = true;   /* ein Wunsch schaltet die Autoverbindung wieder ein */
     memcpy(s_conn_bda, addr, sizeof(addr));
 
     esp_err_t err = esp_bt_audio_classic_connect(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC, addr);
@@ -357,6 +449,13 @@ esp_err_t bt_mgr_connect_index(int idx)
 
 esp_err_t bt_mgr_disconnect(void)
 {
+    /*
+     * Ausdrueckliches Trennen schaltet die Autoverbindung ab (0.9.66) - sonst
+     * waere die Gegenstelle 15 s spaeter wieder da, was niemand erwartet. Die
+     * gemerkte Adresse bleibt: beim naechsten Start wird wieder verbunden.
+     */
+    s_want_autoconnect = false;
+
     if (!s_connected && !s_connecting) {
         return ESP_OK;
     }
@@ -396,6 +495,13 @@ esp_err_t bt_mgr_forget(void)
     ESP_LOGI(TAG, "Bindung geloescht: %02X:%02X:%02X:%02X:%02X:%02X",
              s_conn_bda[0], s_conn_bda[1], s_conn_bda[2],
              s_conn_bda[3], s_conn_bda[4], s_conn_bda[5]);
+    /* Auch unsere eigene Ablage leeren (0.9.66) - sonst wuerde der naechste
+     * Start die geloeschte Gegenstelle wieder ansprechen. */
+    nvs_clear_peer();
+    s_saved_valid = false;
+    memset(s_saved_bda, 0, sizeof(s_saved_bda));
+    s_want_autoconnect = false;
+
     memset(s_conn_bda, 0, sizeof(s_conn_bda));
     return ESP_OK;
 }
@@ -438,8 +544,59 @@ bool bt_mgr_audio_streaming(void)
     return s_streaming;
 }
 
-bool bt_mgr_autoconnect_saved(void)
+bool bt_mgr_autoconnect_saved(uint8_t *bda_out)
 {
-    /* Siehe bt_manager.h: in diesem Projekt gibt es keine eigene NVS-Ablage. */
-    return false;
+    if (!s_saved_valid) {
+        return false;
+    }
+    if (bda_out != NULL) {
+        memcpy(bda_out, s_saved_bda, ESP_BD_ADDR_LEN);
+    }
+    return true;
+}
+
+void bt_mgr_autoconnect_tick(void)
+{
+    int64_t now = esp_timer_get_time();
+
+    /* Neue Gegenstelle nachtragen; das NVS-Schreiben gehoert hierher und nicht
+     * in den BT-Ereigniskontext (siehe nvs_save_peer). */
+    if (s_peer_dirty) {
+        s_peer_dirty = false;
+        nvs_save_peer(s_saved_bda);
+    }
+
+    /*
+     * Notausstieg: liefert ein Verbindungsversuch gar kein Ereignis (Gegenstelle
+     * aus, kein Page-Timeout-Ereignis), bliebe s_connecting stehen und die
+     * Autoverbindung waere blockiert. Nach BT_MGR_CONNECT_TIMEOUT_MS gilt der
+     * Versuch als gescheitert.
+     */
+    if (s_connecting) {
+        if (s_connect_since_us != 0
+            && (now - s_connect_since_us) > (int64_t)BT_MGR_CONNECT_TIMEOUT_MS * 1000) {
+            ESP_LOGW(TAG, "Verbindungsversuch ohne Ereignis nach %u s - neuer Versuch",
+                     (unsigned)(BT_MGR_CONNECT_TIMEOUT_MS / 1000u));
+            s_connecting = false;
+            s_connect_since_us = 0;
+        } else {
+            return;
+        }
+    }
+
+    if (!s_want_autoconnect || !s_saved_valid || s_connected
+        || s_discovering) {
+        s_last_try_us = now;
+        return;
+    }
+    if (s_last_try_us != 0 && (now - s_last_try_us) < (int64_t)BT_MGR_RETRY_MS * 1000) {
+        return;
+    }
+    s_last_try_us = now;
+
+    ESP_LOGI(TAG, "Autoverbindung: Versuch %02X:%02X:%02X:%02X:%02X:%02X (alle %u s)",
+             s_saved_bda[0], s_saved_bda[1], s_saved_bda[2],
+             s_saved_bda[3], s_saved_bda[4], s_saved_bda[5],
+             (unsigned)(BT_MGR_RETRY_MS / 1000u));
+    (void)bt_mgr_connect_bda(s_saved_bda);
 }

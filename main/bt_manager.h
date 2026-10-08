@@ -130,16 +130,41 @@ v4p_bt_state_t bt_mgr_state(void);
 /** @brief True while audio is actually streaming (A2DP started). */
 bool bt_mgr_audio_streaming(void);
 
-/**
- * @brief Wenn eine Gegenstelle im NVS liegt, sie kopieren und verbinden.
+/*
+ * Autoverbindung (0.9.66)
  *
- * In diesem Projekt gibt es keine eigene NVS-Ablage fuer die Gegenstelle -
- * Bluedroid/esp_bt_audio verwalten die Bindung. Die Funktion meldet deshalb
- * immer false und ist nur noch da, damit der Vertrag vollstaendig bleibt.
+ * Die zuletzt erfolgreich verbundene Gegenstelle liegt in unserem eigenen NVS
+ * (Bluedroid haelt die Bindung ohnehin dort, aber ohne eigene Ablage kann die
+ * Firmware nicht selbst entscheiden, wen sie nach einem Neustart anspricht und
+ * ob sie es erneut versuchen soll).
  *
- * @return immer false
+ * Ablauf: Beim Start verbindet Bluedroid die gebundene Gegenstelle von sich aus
+ * (beobachtet: rund 5 s nach dem Boot). Klappt das nicht - die Senke ist z.B.
+ * noch aus -, versucht bt_mgr_autoconnect_tick() es alle BT_MGR_RETRY_MS erneut,
+ * solange bis eine Verbindung steht. Der Takt kommt aus stream_proc_task; die
+ * I2C-Bruecke ist davon unabhaengig und wartet nie darauf.
+ *
+ * Nach einem ausdruecklichen DISCONNECT oder FORGET wird nicht automatisch
+ * weiterverbunden (s_want_autoconnect).
  */
-bool bt_mgr_autoconnect_saved(void);
+#define BT_MGR_RETRY_MS     15000u
+
+/**
+ * @brief Gemerkte Gegenstelle kopieren.
+ *
+ * @param[out] bda_out 6 Byte Puffer, darf NULL sein (dann nur die Abfrage)
+ * @return true, wenn eine Gegenstelle gemerkt ist
+ */
+bool bt_mgr_autoconnect_saved(uint8_t *bda_out);
+
+/**
+ * @brief Autoverbindung antreiben (aus einer regulaessigen Schleife rufen).
+ *
+ * Schreibt eine neu verbundene Gegenstelle ins NVS und startet nach
+ * BT_MGR_RETRY_MS einen neuen Verbindungsversuch, wenn keine steht. Kehrt
+ * sofort zurueck; blockiert nie (der Verbindungsaufbau laeuft asynchron).
+ */
+void bt_mgr_autoconnect_tick(void);
 
 /*
  * Ereignis-Eingang (0.9.57).
