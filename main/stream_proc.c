@@ -1563,7 +1563,16 @@ static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
  * 1024 Byte = 256 Stereoframes bei 16 Bit = 5,3 ms bei 48 kHz.
  */
 #define MIXER_PROC_BYTES    1024
-#define MIXER_DB_ITEMS      12      /* I2S-Zweig: 12 KB (Echtzeit) */
+/*
+ * I2S-Zweig: 12 -> 10 KB (0.9.63).
+ *
+ * Der Puffer stand bei 20 KB durchgehend auf 100 % (Minimum 18560 von 20480),
+ * 12 KB decken bei 176400 Byte/s rund 70 ms ab, 10 KB rund 58 ms - fuer die
+ * Uebergabe zwischen zwei Aufgaben auf demselben Kern weiterhin reichlich.
+ * Die 2 KB fehlten dem MP3-Dekoder (docs/MP3_STARTFEHLER.md). Falls der Ton
+ * der Vampire dadurch Aussetzer zeigt, ist das die erste Stellschraube.
+ */
+#define MIXER_DB_ITEMS      10
 #define MIXER_DB_ITEM_SIZE  1024
 /*
  * Der Datei-Zweig bekommt nur 4 KB (0.9.31).

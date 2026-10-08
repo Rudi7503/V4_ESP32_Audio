@@ -95,10 +95,14 @@ static const char *TAG = "LIN_RESAMPLE";
  *
  * Rechnung: groesster Dekoderblock 1152 Frames, Verhaeltnis 48000/44100 = 1,088
  * (der Wandler laeuft je nach Aushandlung mit 44,1 oder 48 kHz), 2 Kanaele,
- * 16 Bit -> 1152 * 1,088 * 2 * 2 = 5016 Byte. Aufgerundet auf 1024 ergibt 5120;
- * 6144 laesst Luft fuer Ratenverhaeltnisse bis 1,33.
+ * 16 Bit -> 1152 * 1,088 * 2 * 2 = 5016 Byte. Auf 1024 aufgerundet ergibt 5120.
+ *
+ * 6144 -> 5120 (0.9.63): Die 6144 aus 0.9.61 waren ein KB Reserve, die auf
+ * einem Modul ohne PSRAM an anderer Stelle fehlt - der Dekoder braucht seinen
+ * 4608-Byte-Ausgangspuffer im selben Moment (docs/MP3_STARTFEHLER.md). 5120
+ * deckt den berechneten Bedarf genau ab.
  */
-#define LIN_RESAMPLE_OUT_PAYLOAD_MAX 6144
+#define LIN_RESAMPLE_OUT_PAYLOAD_MAX 5120
 
 /*
  * Ein Sample lesen - je nach Eingangsformat.
