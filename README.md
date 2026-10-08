@@ -1,16 +1,19 @@
 ## Stand
 
-**0.9.80** - **Dekoder-Arena: Freigabe hinter den Aufbau des Datei-Zweigs.**
-Messung aus 0.9.79 mit zwei neuen Zeilen in `local2bt_arena_release()`:
+**0.9.80** - **Dekoder-Arena: Freigabe hinter den Aufbau - NICHT ausreichend.**
+Am 08.10.2026 mit 5 Durchläufen im Wechsel geprueft (Mitschnitt /tmp/test5x.log):
 
-    Dekoder-Arena freigegeben: groesster Block 5632 -> 36864 Byte   (Luecke entsteht)
-    Nach dem Start des Datei-Zweigs: groesster Block 32768 Byte     (Aufbau nimmt ~4 KB)
+    test_tone_48k.wav  2x  sauber   (No more data -> FINISHED)
+    test2.mp3          3x  Fehler   (Fail to init MP3 decoder ret 10)
 
-Der MP3-Dekoder braucht rund 32 KB am Stueck - es lief also mal und mal nicht
-(Wettlauf, kein Mengenproblem: 0.9.79 spielte, 0.9.77/0.9.78 scheiterten mit
-`Fail to init MP3 decoder ret 10`). Jetzt wird erst nach dem Aufbau freigegeben,
-damit der Dekoder die vollen 36864 Byte bekommt. Anwenderbestaetigung:
-"hoere mp3 und v4 gut und zuverlaessig".
+    Dekoder-Arena freigegeben        -> groesster Block 36 864 Byte
+    nach dem Aufbau des Datei-Zweigs -> groesster Block 27 648 Byte
+
+Damit ist die Schwelle gemessen: in 0.9.79 waren es 32 768 Byte und der MP3
+lief, jetzt 27 648 Byte und er scheitert. Der Dekoder braucht also rund 32 KB
+am Stueck, und der Aufbau des Datei-Zweigs verbraucht davon 9 216 Byte - der
+Wettlauf bleibt. **Kein verifizierter Stand.** Naechster Versuch: Arena auf
+rund 42 KB (32 KB Bedarf + ~9 KB Aufbau) oder der statische Bereich in .bss.
 
 ## Stand
 
