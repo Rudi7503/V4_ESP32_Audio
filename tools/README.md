@@ -19,6 +19,7 @@ D:\Coding\ESP-IDF\.espressif      ESP-IDF v6.1 und Toolchain
 | `idf61_env.ps1` | setzt `IDF_PATH` und die Umgebung fuer ESP-IDF v6.1 |
 | `make_tone48k.py` | erzeugt die Testdateien `test_tone_48k.wav` (48 kHz) und `test_tone_440.wav` (44,1 kHz), je 3 s, mono, 440 Hz, halber Pegel |
 | `rate_conv_model.py` | Modellrechnung zum Vergleich von GMF-Ratenwandlung und linearer Interpolation |
+| `attach_board.sh` | **Linux-Seite** (WSL): haengt das Board nach einem Flashen/USB-Neustart per `usbipd` wieder an WSL (Vorgabe Bus-ID 1-5) und wartet auf `/dev/ttyUSB0`. Nach jedem Flashen faellt die Anbindung ab - ohne diesen Schritt scheitert der naechste Monitorlauf. |
 | `monitor.py` | **Linux-Seite** (WSL): liest den seriellen Monitor und schickt Befehle. `monitor.py 75 version free v4_bus v4_selftest`. Setzt DTR/RTS bewusst auf False (DTR haengt auf GPIO0, RTS auf EN) und versucht einen Reset in den Laufmodus ueber einen RTS-Puls. |
 
 ## Flashen und Lesen unter Linux (WSL)
