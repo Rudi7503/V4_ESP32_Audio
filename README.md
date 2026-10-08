@@ -15,18 +15,28 @@ Konsole.
 
 ## Stand
 
+**0.9.60** - SPI-Rueckfall beim SD-Mount entfernt. `sd_card_mount()` versucht nur
+noch 1-Bit-SDMMC (bis zu 3 Versuche, 4 MHz); der zweite Weg ueber SPI auf
+denselben Leitungen ist weg, ebenso `SD_SPI_MAX_FREQ_KHZ`, die Zustandsmerker
+`s_spi_bus`/`s_over_spi` und die beiden Includes `driver/sdspi_host.h` und
+`driver/spi_common.h`. Aus der Komponentenliste in `main/CMakeLists.txt` faellt
+`esp_driver_sdspi`. Er war reine Absicherung und wurde nie gebraucht: die
+Ursachen des SD-Ausfalls waren der Flash-Takt (80 statt 40 MHz) und der fehlende
+DAT0-Pull-up, beide behoben. Ein zweiter Mountweg bedeutet nur einen zweiten
+Fehlerpfad, den niemand wartet - und er kostete **32 848 Byte** im Image, weil
+der SPI-Master-Treiber mitging (0x20c980 -> 0x204930, jetzt 33 % frei).
+GPIO13 heisst jetzt `SD_PIN_DAT3` statt `SD_PIN_CS`: es ist DAT3, das beim
+SDMMC-Init HIGH sein muss, kein Chip Select.
+
 **0.9.59** - Die Platinen-Diagnosekommandos entfernt: `sdreg` (189 Zeilen),
 `sdpins` (132), `sd_mount_spi` (85) und `scanpins` (35), zusammen mit ihren
 Helfern (`sdreg_fsm`, `sdreg_cmd8_test`, `sdtrace_task`, `sdreg_lage`,
 `sdreg_wait_reset`) und den Includes, die nur sie brauchten. Sie haben ihren
 Zweck erfuellt: mit `sdpins` und `sdreg` wurde der fehlende DAT0-Pull-up
-gefunden, `scanpins` hat die RS232-Leitungen zugeordnet. Der SD-Weg laeuft, und
-die Karte mountet ueber sd_card.c (SDMMC mit SPI-Rueckfall) - **der
-automatische SPI-Rueckfall bleibt unberuehrt**, entfernt ist nur das
-gleichnamige Handkommando. Kein Konsolenbefehl kostet im Betrieb Laufzeit, aber
-441 Zeilen in `cmd_reg.c` waren zu pflegen, wenn sich an den Treibern etwas
-aendert. `cmd_version` zeigt den Flash-Takt weiterhin (dafuer bleibt
-`flash_clock_mhz`).
+gefunden, `scanpins` hat die RS232-Leitungen zugeordnet. Kein Konsolenbefehl
+kostet im Betrieb Laufzeit, aber 441 Zeilen in `cmd_reg.c` waren zu pflegen, wenn
+sich an den Treibern etwas aendert. `cmd_version` zeigt den Flash-Takt weiterhin
+(dafuer bleibt `flash_clock_mhz`).
 
 **0.9.58** - Diagnosecode entfernt, der im Betrieb mitlief. Der Ton war bewiesen,
 die Messhilfen kosteten nur noch: ein Task schrieb alle 5 s die CPU-Last beider

@@ -17,23 +17,22 @@ extern "C" {
 /**
  * @brief  Mount the microSD card at /sdcard
  *
- * Try 1: 1-bit SDMMC on the fixed ESP32 slot-1 pins (CLK=GPIO14, CMD=GPIO15,
- * D0=GPIO2), card detect on GPIO34 (low = card inserted).
+ * 1-bit SDMMC on the fixed ESP32 slot-1 pins (CLK=GPIO14, CMD=GPIO15,
+ * D0=GPIO2), card detect on GPIO34 (low = card inserted), up to 3 attempts.
  *
- * Try 2: if SDMMC fails, the same three wires are used as SPI (CLK, MOSI=CMD,
- * MISO=D0) with the card-detect line doubling as chip select - no rewiring.
- * Reason: the replacement module's SDMMC block times out on its very first
- * clock-update command (0x107), before any data transfer, while holder, card
- * and wiring are unchanged and worked with the previous module.
+ * Es gibt nur diesen einen Weg. Ein frueher vorhandener SPI-Rueckfall auf
+ * denselben Leitungen ist in 0.9.60 entfernt worden - er war Absicherung fuer
+ * einen Fehler (Flash-Takt 80 MHz, fehlender DAT0-Pull-up), der laengst behoben
+ * ist.
  *
  * @return
- *       - ESP_OK     Card mounted (either transport)
+ *       - ESP_OK     Card mounted
  *       - ESP_FAIL   No card, or the filesystem could not be mounted
  */
 esp_err_t sd_card_mount(void);
 
 /**
- * @brief  Which transport the mounted card uses ("SDMMC 1 Bit" or "SPI")
+ * @brief  Which transport the mounted card uses ("SDMMC 1 Bit" / "nicht verbunden")
  */
 const char *sd_card_transport(void);
 

@@ -10,8 +10,6 @@
 #include "esp_vfs_fat.h"
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h"
-#include "driver/sdspi_host.h"
-#include "driver/spi_common.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
@@ -28,18 +26,11 @@
  */
 #define SD_MAX_FILE_HANDLES    8
 #define SD_MAX_FREQ_KHZ        4000
-#define SD_SPI_MAX_FREQ_KHZ    1000
 #define SD_MOUNT_ATTEMPTS      3
 #define SD_RETRY_DELAY_MS      200
 
 /*
- * Pinbelegung des Kartenslots. Sie gilt fuer BEIDE Wege - es wird nichts
- * umverdrahtet, nur die Bedeutung der Leitungen aendert sich:
- *
- *   Leitung   SDMMC (1 Bit)      SPI
- *   CLK       CLK                CLK
- *   CMD       CMD (bidirekt.)    MOSI (nur zum Kart)
- *   D0        DAT0               MISO (nur vom Kart)
+ * Pinbelegung des Kartenslots (1-Bit-SDMMC).
  *
  * Der ESP32 SDMMC-Host hat KEINE GPIO-Matrix: fuer Slot 1 stehen die Pins fest
  * (components/soc/esp32/include/soc/sdmmc_pins.h):
@@ -64,31 +55,29 @@
  * keinen internen Pull-up; fuer ein sicheres "nicht vorhanden" braucht es einen
  * externen 10k nach 3,3 V.
  *
- * NICHT als CS verwenden! Der erste Versuch war genau das und ist falsch:
- * esp_driver_sdspi steuert CS per gpio_set_level und legt den Pin dabei als
- * AUSGANG an (sdspi_host.c:377-396, "Configure CS pin", .mode = GPIO_MODE_OUTPUT).
- * GPIO34 kann das auf dem ESP32 nicht - er ist input-only.
+ * GPIO34 kann ausserdem nicht als Ausgang dienen (input-only) - er ist deshalb
+ * nur fuer Card Detect verwendbar, nie als Chip Select.
  */
 #define SD_PIN_CD    GPIO_NUM_34
 
 /*
- * Chip Select fuer den SPI-Weg.
+ * DAT3 des Kartenslots (Kartenkontakt 2), hier GPIO13.
  *
- * SPI braucht - anders als SDMMC im 1-Bit-Modus - eine CS-Leitung, und die ist
- * am Slot zusaetzlich zu verdrahten (Kartenkontakt D3/CD). Sie MUSS ein freier
- * Ausgangs-Pin sein; input-only-Pins wie 34/35 scheiden aus.
- *
- * GPIO13 ist auf diesem Testboard frei und ein normaler Ausgang.
+ * Die Karte entscheidet ueber diese Leitung, in welchem Modus sie arbeitet:
+ * sieht sie DAT3/CS beim CMD0 LOW, schaltet sie in den SPI-Modus und haelt
+ * danach DAT0 als Busy-Signal auf LOW. Im 1-Bit-SDMMC-Modus wird DAT3 sonst
+ * nicht gebraucht, und IDF konfiguriert D1..D3 erst ab 4 Bit Breite
+ * (esp_driver_sdmmc/src/sd_host_sdmmc.c:1376-1385, dort steht ausdruecklich
+ * "Force D3 high to make slave enter SD mode") - deshalb ziehen wir es selbst
+ * vor dem Mountversuch auf HIGH (sd_dat3_high()).
  */
-#define SD_PIN_CS    GPIO_NUM_13
+#define SD_PIN_DAT3  GPIO_NUM_13
 
 static const char *TAG = "SD_CARD";
 
 static sdmmc_card_t *s_card;
 static bool          s_mounted;
 static bool          s_cd_ready;
-static bool          s_spi_bus;         /* SPI-Bus angelegt -> beim Unmount freigeben */
-static bool          s_over_spi;        /* ueber welchen Weg haengt die Karte? */
 
 static void sd_cd_pin_init(void)
 {
@@ -182,21 +171,18 @@ bool sd_card_is_present(void)
  * IDF konfiguriert D1..D3 erst ab 4 Bit Breite
  * (esp_driver_sdmmc/src/sd_host_sdmmc.c:1376-1385, dort steht ausdruecklich
  * "Force D3 high to make slave enter SD mode"). Also machen wir es hier selbst.
- *
- * Achtung: der SPI-Weg benutzt GPIO13 als CS - dort darf der Pin nicht fest
- * auf HIGH liegen, deshalb wird er nur vor dem SDMMC-Versuch gesetzt.
  */
 static void sd_dat3_high(void)
 {
     gpio_config_t cfg = {
-        .pin_bit_mask = 1ULL << SD_PIN_CS,      /* GPIO13 = DAT3 am Kartenslot */
+        .pin_bit_mask = 1ULL << SD_PIN_DAT3,    /* GPIO13 = DAT3 am Kartenslot */
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&cfg);
-    gpio_set_level(SD_PIN_CS, 1);
+    gpio_set_level(SD_PIN_DAT3, 1);
 }
 
 /*
@@ -267,72 +253,6 @@ static esp_err_t sd_mount_try_sdmmc(void)
     return err;
 }
 
-/*
- * Weg 2: SPI auf denselben Leitungen.
- *
- * WOZU: falls SDMMC einmal nicht geht, kann die Karte ueber SPI trotzdem
- * laufen - langsamer, aber voll funktionsfaehig. Der Versuch trennt ausserdem
- * zwei Faelle sauber:
- *   - SPI geht   -> SDMMC-Weg gestoert, Karte und Halter sind in Ordnung
- *   - SPI geht nicht -> es liegt an Karte/Halter/Verkabelung
- *
- * Wichtig: der eigentliche SD-Fehler war der Flash-Takt (siehe oben). Als der
- * noch auf 80 MHz stand, scheiterte auch der SPI-Weg - mit
- *   sdmmc_init_sd_if_cond: send_if_cond (1) returned 0x108
- * also CMD8 ohne Antwort. Mit 40 MHz Flash wird dieser Weg gar nicht erst
- * gebraucht, SDMMC mountet sofort. Der Fallback bleibt als Absicherung.
- */
-static esp_err_t sd_mount_try_spi(void)
-{
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;
-    host.max_freq_khz = SD_SPI_MAX_FREQ_KHZ;
-    host.unaligned_multi_block_rw_max_chunk_size = 8;
-
-    /*
-     * MOSI = CMD (GPIO15), MISO = D0 (GPIO2), CLK = GPIO14,
-     * CS = eigener Ausgang (SD_PIN_CS). max_transfer_sz wie im offiziellen
-     * Beispiel (examples/storage/sd_card/sdspi/main/sd_card_example_main.c:144-151).
-     */
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = SD_PIN_CMD,
-        .miso_io_num = SD_PIN_D0,
-        .sclk_io_num = SD_PIN_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
-    };
-    esp_err_t err = spi_bus_initialize(host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "SPI-Bus liess sich nicht anlegen: %s", esp_err_to_name(err));
-        return err;
-    }
-    s_spi_bus = true;
-
-    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.host_id = host.slot;
-    slot.gpio_cs = SD_PIN_CS;
-    slot.gpio_cd = SD_PIN_CD;
-    slot.gpio_wp = SDSPI_SLOT_NO_WP;
-    ESP_LOGI(TAG, "SPI: CLK=GPIO%d MOSI=GPIO%d MISO=GPIO%d CS=GPIO%d",
-             SD_PIN_CLK, SD_PIN_CMD, SD_PIN_D0, SD_PIN_CS);
-
-    esp_vfs_fat_mount_config_t mcfg = {
-        .format_if_mount_failed = false,
-        .max_files = SD_MAX_FILE_HANDLES,
-        .allocation_unit_size = 16 * 1024,
-    };
-
-    s_card = NULL;
-    err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot, &mcfg, &s_card);
-    if (err != ESP_OK) {
-        s_card = NULL;
-        spi_bus_free(host.slot);
-        s_spi_bus = false;
-    }
-    return err;
-}
-
 esp_err_t sd_card_mount(void)
 {
     if (s_mounted) {
@@ -345,12 +265,21 @@ esp_err_t sd_card_mount(void)
     ESP_LOGI(TAG, "Card detect (GPIO%d): %s", SD_PIN_CD,
              present ? "card inserted" : "no card / pin floating");
 
+    /*
+     * Nur noch ein Weg: 1-Bit-SDMMC.
+     *
+     * Der frueher hier stehende SPI-Rueckfall auf denselben Leitungen ist in
+     * 0.9.60 entfernt worden. Er war reine Absicherung - gebraucht wurde er nie:
+     * die eigentlichen Ursachen des SD-Ausfalls waren der Flash-Takt (80 statt
+     * 40 MHz) und der fehlende DAT0-Pull-up, beide behoben. Ein zweiter
+     * Mountweg haette nur einen zweiten Fehlerpfad bedeutet, den niemand
+     * wartet.
+     */
     esp_err_t err = ESP_FAIL;
     for (int attempt = 1; attempt <= SD_MOUNT_ATTEMPTS; attempt++) {
         ESP_LOGI(TAG, "SDMMC-Versuch %d/%d (max %d kHz)", attempt, SD_MOUNT_ATTEMPTS, SD_MAX_FREQ_KHZ);
         err = sd_mount_try_sdmmc();
         if (err == ESP_OK) {
-            s_over_spi = false;
             break;
         }
         ESP_LOGW(TAG, "SDMMC-Versuch %d fehlgeschlagen: %s", attempt, esp_err_to_name(err));
@@ -360,30 +289,14 @@ esp_err_t sd_card_mount(void)
     }
 
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "SDMMC geht nicht - versuche SPI auf denselben Leitungen");
-        for (int attempt = 1; attempt <= SD_MOUNT_ATTEMPTS; attempt++) {
-            ESP_LOGI(TAG, "SPI-Versuch %d/%d", attempt, SD_MOUNT_ATTEMPTS);
-            err = sd_mount_try_spi();
-            if (err == ESP_OK) {
-                s_over_spi = true;
-                break;
-            }
-            ESP_LOGW(TAG, "SPI-Versuch %d fehlgeschlagen: %s", attempt, esp_err_to_name(err));
-            if (attempt < SD_MOUNT_ATTEMPTS) {
-                vTaskDelay(pdMS_TO_TICKS(SD_RETRY_DELAY_MS));
-            }
-        }
-    }
-
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "mount failed: %s (SDMMC und SPI versucht - Karte richtig gesteckt? Kontakte?)",
+        ESP_LOGE(TAG, "mount failed: %s (Karte richtig gesteckt? Kontakte? Flash-Takt 40 MHz?)",
                  esp_err_to_name(err));
         s_mounted = false;
         return err;
     }
 
     s_mounted = true;
-    ESP_LOGI(TAG, "mounted at %s (%s)", SD_MOUNT_POINT, s_over_spi ? "SPI" : "SDMMC 1 Bit");
+    ESP_LOGI(TAG, "mounted at %s (SDMMC 1 Bit)", SD_MOUNT_POINT);
     sdmmc_card_print_info(stdout, s_card);
     return ESP_OK;
 }
@@ -396,11 +309,6 @@ esp_err_t sd_card_unmount(void)
     esp_err_t err = esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, s_card);
     s_card = NULL;
     s_mounted = false;
-    if (s_spi_bus) {
-        spi_bus_free(SPI2_HOST);
-        s_spi_bus = false;
-    }
-    s_over_spi = false;
     return err;
 }
 
@@ -411,10 +319,7 @@ bool sd_card_is_mounted(void)
 
 const char *sd_card_transport(void)
 {
-    if (!s_mounted) {
-        return "nicht verbunden";
-    }
-    return s_over_spi ? "SPI" : "SDMMC 1 Bit";
+    return s_mounted ? "SDMMC 1 Bit" : "nicht verbunden";
 }
 
 uint16_t sd_card_sector_size(void)

@@ -1,4 +1,4 @@
-set(reqs "bt" "nvs_flash" "console" "fatfs" "esp_driver_sdmmc" "esp_driver_sdspi" "esp_driver_i2s"
+set(reqs "bt" "nvs_flash" "console" "fatfs" "esp_driver_sdmmc" "esp_driver_i2s"
          "esp_driver_i2c" "soc")
 
 # ---------------------------------------------------------------------------
