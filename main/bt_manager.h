@@ -51,7 +51,7 @@ extern "C" {
  * zwei weiteren Puffern her. Vier gemerkte Geraete reichen; die Bindung selbst
  * liegt weiterhin in Bluedroids NVS.
  */
-#define BT_MGR_MAX_DEVICES  4
+#define BT_MGR_MAX_DEVICES  2      /* 0.9.78: 4 -> 2, je Eintrag ~256 Byte */
 
 typedef struct {
     esp_bd_addr_t bda;

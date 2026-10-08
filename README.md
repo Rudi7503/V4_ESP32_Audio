@@ -28,6 +28,15 @@ V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
 
 ## Stand
 
+**0.9.78** - **Option A: die letzten weichen Speicherposten.** Fuer den
+MP3-Dekoder, der beim Oeffnen rund 32 KB am Stueck braucht (0.9.77: frei 34880,
+groesster Block aber nur 1536 - die Arena-Luecke wurde von den
+Pipeline-Allokationen zerschnitten):
+  Bruecken-Stacks   4096/2560 -> 3072/2048   (+1,5 KB; gemessen 2352/780 Byte)
+  Datei-Ring        8 -> 6 x 1024            (+2 KB; ein Block ist 5016 Byte)
+  BT-Geraetetabelle 4 -> 2 Eintraege         (+0,5 KB)
+  zusammen rund 4 KB
+
 **0.9.77** - **Speicher: I2C-Puffer auf den echten Bedarf, Dekoder-Arena.**
 Zwei Posten in einem Build:
 

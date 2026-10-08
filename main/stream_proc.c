@@ -1725,7 +1725,13 @@ static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
  * und der Datenstrom ist danach um 2 Byte verschoben. Hoerbar als Verzerrung
  * ab dem zweiten Titel (die erste Datei lief, weil der Ring da leer war).
  */
-#define FILE_DB_ITEMS       8      /* siehe Begruendung oben (ein Block = 5016 Byte) */
+/*
+ * 0.9.78: 8 -> 6. Der Ring muss EINEN Dekoderblock aufnehmen: nach der
+ * Ratenwandlung 44100 -> 48000 sind das 5016 Byte, 6 x 1024 = 6144 passt also
+ * weiterhin. Die 2 KB fehlen dem MP3-Dekoder, der beim Oeffnen rund 32 KB am
+ * Stueck braucht (siehe Dekoder-Arena).
+ */
+#define FILE_DB_ITEMS       6
 
 static esp_gmf_err_t setup_pipeline_mixer(esp_gmf_pool_handle_t pool)
 {

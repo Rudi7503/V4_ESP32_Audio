@@ -75,11 +75,12 @@ extern "C" {
  *   v4_link (dispatch -> sd_fs -> VFS -> FatFs): 2352 Byte gebraucht
  *   v4_work (verzoegerte Arbeit, flach):          780 Byte gebraucht
  *
- * 4096 bzw. 2560 lassen beiden rund 1,7 KB Reserve; 'v4_bus' zeigt den
+ * 0.9.78: 3072 bzw. 2048 - die Messung (2352 / 780 Byte) laesst 720 bzw.
+ * 1268 Byte Reserve. Damit sind es zusammen 5 KB statt 12 KB beim ersten Wurf. 'v4_bus' zeigt den
  * kleinsten Rest seit dem Start an.
  */
-#define V4_LINK_TASK_STACK      4096
-#define V4_WORK_TASK_STACK      2560
+#define V4_LINK_TASK_STACK      3072
+#define V4_WORK_TASK_STACK      2048
 #define V4_TASK_PRIO            6
 
 /**
