@@ -21,17 +21,32 @@ Tonbruecke weiter (und umgekehrt).
 
 ## 1. Verdrahtung
 
-Aus `PIN verbindungen.txt` des Vorgaengerprojekts - sie gilt unveraendert:
+**Quelle ist das Platinenprojekt**, nicht die Textdatei: die Tabelle unten stammt
+aus dem Netzplan von
+`D:\programmier_ordner\Vampire_V4_KiCad\ESP32_I2S\ESP32_I2S.kicad_pcb`
+(ESP32-Modul U1, P20-Stecker, I2C-Stecker) und stimmt mit dem ueberein, was
+`main/i2s_input.c` schon benutzt hat.
 
-| ESP32 | Vampire | Funktion |
-|---|---|---|
-| GND | P20 Pin 2 | GND |
-| GPIO35 | P20 Pin 6 | Din (I2S-Daten V4 → ESP32) |
-| GPIO5 | P20 Pin 8 | Bclk |
-| GPIO25 | P20 Pin 10 | Wsel (Word Select) |
-| GPIO18 | I2C Pin 2 | SDA |
-| GPIO23 | I2C Pin 3 | SCL |
-| GND | I2C Pin 4 | GND |
+| ESP32 | Vampire | Funktion | Netz im Netzplan |
+|---|---|---|---|
+| GND | P20 Pin 2 | GND | GND |
+| GPIO25 | P20 Pin 6 | Wsel (Word Select) | `/WSEL` |
+| GPIO5 | P20 Pin 8 | Bclk | `/BCKL` (Tippfehler im Plan) |
+| GPIO35 | P20 Pin 10 | Din (I2S-Daten V4 → ESP32) | `/DIN` |
+| GPIO18 | I2C Pin 2 | SDA | `/SDA` |
+| GPIO23 | I2C Pin 3 | SCL | `/SCL` |
+| GND | I2C Pin 4 | GND | GND |
+
+Ausserdem am Modul belegt (aus demselben Netzplan): GPIO14 `/SD_HOST_CLK`,
+GPIO15 `/SD_HOST_CMD`, GPIO2 `/SD_HOST_DATA`, GPIO34 `/SD_DET`,
+GPIO26 `/DOUT_ESP32` (I2S-Ausgang, im Projekt nicht benutzt).
+
+**Achtung, hier steckte ein Fehler in der Vorlage:** die Datei
+`PIN verbindungen.txt` im Vorgaengerprojekt `ESP32-I2S-to-BT` hat die Zeilen fuer
+P20 Pin 6 und Pin 10 **vertauscht** (sie nennt GPIO35 auf Pin 6 und GPIO25 auf
+Pin 10). Richtig ist laut Netzplan und laut `i2s_input.c`: **GPIO25 = Pin 6 =
+WSEL**, **GPIO35 = Pin 10 = DIN**. Die I2C-Zeilen (18/23) sind in beiden Quellen
+gleich - die Bruecke selbst war also nicht betroffen.
 
 I2C-Adresse des ESP32: **0x50** (7 Bit) - auf der Leitung `0xA0` schreiben,
 `0xA1` lesen. Der ESP32 kann als Slave **nicht** clock-stretchen; daraus folgt
