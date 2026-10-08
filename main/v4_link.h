@@ -51,7 +51,7 @@ extern "C" {
  * fassen einen vollstaendigen Rahmen und lassen 116 Byte Luft; der Master liest
  * je Anforderung genau einen Rahmen.
  */
-#define V4_TX_BUF_DEPTH         1152
+#define V4_TX_BUF_DEPTH         384      /* ein Bulk-Rahmen: 8+256+4 = 268, 0.9.77 */
 /* The master writes 32 byte commands; a little headroom for the queues. */
 #define V4_RX_BUF_DEPTH         64
 #define V4_RX_QUEUE_LEN         4

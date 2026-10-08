@@ -28,6 +28,24 @@ V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
 
 ## Stand
 
+**0.9.77** - **Speicher: I2C-Puffer auf den echten Bedarf, Dekoder-Arena.**
+Zwei Posten in einem Build:
+
+1. Die I2C-Puffer waren fuer den groessten Bulk-Rahmen ausgelegt (8 + 1024 + 4
+   Byte), obwohl der Bulk-Weg nur von der Konsolenfunktion "Datei lesen/pruefen"
+   benutzt wird - fuer die Wiedergabe liest der ESP32 die SD-Karte selbst, und
+   ausgehandelt ist ohnehin chunk = 128 (Rahmen = 140 Byte). Jetzt
+   `V4P_BULK_PAYLOAD_MAX`/`V4P_CHUNK_MAX` = 256, Senden 1152 -> 384, Antwort
+   1036 -> 268, Bulk-Cache 1024 -> 256: rund **2,4 KB** gewonnen.
+2. **Dekoder-Arena**: Der MP3-Dekoder holt beim Oeffnen rund 32 KB
+   (68436 -> 36704 Byte frei) - zu einem Zeitpunkt, an dem der DRAM durch
+   BT-Stack, BT-Profile und Bruecke zersplittert ist (groesster Block danach
+   640 Byte, selbst der BT-Stack scheitert mit "calloc failed"). Deshalb wird
+   der Block beim Start reserviert (DRAM noch zusammenhaengend) und
+   unmittelbar vor der Wiedergabe freigegeben - er liegt dann als eine grosse
+   Luecke bereit. Nach dem Stopp wird er erneut reserviert. Schlaegt die
+   Reservierung fehl, laeuft alles weiter wie vorher.
+
 **0.9.76** - **Reservierung an die richtige Stelle.** 0.9.75 legte den Puffer des
 Dekoders schon beim Pipelineaufbau an (das klappte), der Puffer des linearen
 Wandlers scheiterte dort aber: `Vorab-Puffer: 'aud_lin_resample_file' hat keinen

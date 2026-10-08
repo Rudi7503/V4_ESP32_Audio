@@ -111,13 +111,21 @@ extern "C" {
 /* payload capacities */
 #define V4P_WRITE_PAYLOAD_MAX   27
 #define V4P_READ_PAYLOAD_MAX    121
-#define V4P_BULK_PAYLOAD_MAX    1024
+/*
+ * 1024 -> 256 (0.9.77): Der Bulk-Weg wird nur von der Konsolenfunktion
+ * "Datei lesen/pruefen" benutzt - fuer die Wiedergabe liest der ESP32 die
+ * SD-Karte selbst. Ausgehandelt ist ohnehin chunk = 128, ein Rahmen ist
+ * also 140 Byte gross. Die Puffer waren fuer das Maximum (1 KB) ausgelegt
+ * und hielten rund siebenmal mehr als noetig: Senden 1152 -> 384, Antwort
+ * 1036 -> 268, Bulk-Cache 1024 -> 256, zusammen rund 2,4 KB.
+ */
+#define V4P_BULK_PAYLOAD_MAX    256
 #define V4P_BULK_FRAME_MAX      (V4P_BULK_HDR_LEN + V4P_BULK_PAYLOAD_MAX + V4P_BULK_CRC_LEN)
 
 /* default and minimum chunk size for FILE_READ, negotiable via SET_CHUNK */
 #define V4P_CHUNK_DEFAULT       128
 #define V4P_CHUNK_MIN           16
-#define V4P_CHUNK_MAX           1024
+#define V4P_CHUNK_MAX           256      /* siehe V4P_BULK_PAYLOAD_MAX */
 
 /* path assembly buffer used by PATH_CLEAR / PATH_APPEND */
 #define V4P_PATH_MAX            128

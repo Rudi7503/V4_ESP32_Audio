@@ -196,6 +196,46 @@ static int port_count(esp_gmf_port_handle_t head);
 static void dump_pipeline(const char *what, esp_gmf_pipeline_handle_t pipe);
 static void dump_pipeline_state(const char *what, esp_gmf_pipeline_handle_t pipe);
 
+/*
+ * Dekoder-Arena (0.9.77).
+ *
+ * Der MP3-Dekoder holt sich beim Oeffnen rund 32 KB (gemessen: der freie Heap
+ * faellt von 68436 auf 36704 Byte). Zu diesem Zeitpunkt ist der DRAM durch
+ * BT-Stack, BT-Profile und die Bruecke bereits zersplittert - der groesste
+ * zusammenhaengende Block war danach nur noch 640 Byte gross, und selbst der
+ * BT-Stack scheiterte mit "calloc failed".
+ *
+ * Deshalb wird der Block beim Start angefordert - solange der DRAM noch
+ * zusammenhaengt - und unmittelbar vor dem Start der Wiedergabe wieder
+ * freigegeben. Er liegt dann als eine grosse Luecke bereit, in die der Dekoder
+ * passt, ohne den Rest zu zerreissen. Nach dem Stopp wird er erneut reserviert.
+ * Verliert man ihn (kein zusammenhaengender Block mehr), laeuft alles weiter
+ * wie vorher - nur ohne die Reserve.
+ */
+#define LOCAL2BT_ARENA_BYTES  (36u * 1024u)
+
+static void *s_local2bt_arena;
+
+static void local2bt_arena_reserve(const char *wer)
+{
+    if (s_local2bt_arena != NULL) {
+        return;
+    }
+    s_local2bt_arena = heap_caps_malloc(LOCAL2BT_ARENA_BYTES, MALLOC_CAP_DEFAULT);
+    ESP_LOGI(TAG, "Dekoder-Arena %s: %s (%u Byte)",
+             wer, (s_local2bt_arena != NULL) ? "reserviert" : "nicht verfuegbar",
+             (unsigned)LOCAL2BT_ARENA_BYTES);
+}
+
+static void local2bt_arena_release(void)
+{
+    if (s_local2bt_arena == NULL) {
+        return;
+    }
+    heap_caps_free(s_local2bt_arena);
+    s_local2bt_arena = NULL;
+    ESP_LOGI(TAG, "Dekoder-Arena freigegeben - liegt jetzt zusammenhaengend bereit");
+}
 static void local2bt_request_stop(void)
 {
     local2bt_stop_requested = true;
@@ -347,6 +387,7 @@ static void local2bt_process_stop_request(void)
         ESP_LOGI(TAG, "Wiedergabe beendet - Datei-Zweig war schon angehalten (%s)", gmf_state_to_str(p->state));
     }
     local2bt_lock_give();
+    local2bt_arena_reserve("nach dem Stopp");
 }
 
 static float bt2codec_asrc_weight[STREAM_PROC_ASRC_MAX_WEIGHT_LEN];
@@ -734,6 +775,8 @@ static const char *gmf_state_to_str(int state)
  */
 static void local2bt_play(const char *uri)
 {
+    /* 0.9.77: Arena jetzt freigeben - der Dekoder soll zusammenhaengend finden. */
+    local2bt_arena_release();
     if (local2bt_pipe == NULL) {
         ESP_LOGE(TAG, "Datei-Pipeline ist nicht angelegt");
         return;
@@ -1417,6 +1460,7 @@ static void reserve_output_payload(esp_gmf_pipeline_handle_t pipe,
              tag, bytes, (unsigned)align);
 }
 
+
 static void setup_pipeline_local2bt(esp_gmf_pool_handle_t pool)
 {
     /*
@@ -1490,6 +1534,7 @@ static void setup_pipeline_local2bt(esp_gmf_pool_handle_t pool)
      * Dekoderausgang (ein MP3-Frame = 4608) und der Ausgang unseres Wandlers
      * (1152 Frames x 48000/44100 x 2 Kanaele x 2 Byte = 5016, aufgerundet).
      */
+    local2bt_arena_reserve("beim Start");
     reserve_output_payload(local2bt_pipe, "aud_dec", 4608, 16u);
     /*
      * Der Wandler bekommt seinen Ausgang erst beim Verbinden mit dem Mischer
