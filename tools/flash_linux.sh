@@ -6,6 +6,11 @@
 # nicht hoch und es fehlt danach "python".
 #
 # Aufruf: bash tools/flash_linux.sh [Buildverzeichnis]
+#
+# Das Buildverzeichnis darf BELIEBIG sein - auch ein fremdes Image zum Vergleich
+# (z. B. /mnt/d/Coding/ESP-IDF/V4_ESP32/build fuer den alten Stand 0.9.56).
+# Immer dieses Skript nehmen, nie ein eigenes ad-hoc-Skript: nur hier kommt der
+# Umsteck-Hinweis nach dem Flashen mit heraus, und der gehoert zu JEDEM Flash.
 #         Vorgabe: build  (relativ zum Projektverzeichnis, aus dem aufgerufen wird)
 #
 # Voraussetzungen:

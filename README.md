@@ -13,6 +13,15 @@ Bluetooth-Geraete auflisten/verbinden/trennen, SD-Karte durchsuchen, Datei
 abspielen, Status abfragen. Dieselben Dinge gehen weiterhin ueber die serielle
 Konsole.
 
+## Flashen (Kurzfassung)
+
+**Jeder Flash** laeuft ueber `tools/flash_linux.sh [Buildverzeichnis]` — auch ein
+fremdes oder altes Image zum Vergleich. Das Skript entschaerft CRLF in
+`flash_args`, prueft den Erfolg am Log und gibt danach **immer** den Hinweis
+"FLASH FERTIG - JETZT UMSTECKEN" aus: erst Jumper/Modul zurueckbauen und neu
+starten, dann ist die SD-Karte wieder da. Details in
+[`tools/README.md`](tools/README.md).
+
 ## Stand
 
 **0.9.71** - **Bitpool-Messschalter.** Die CPU-Messung mit `bufs` zeigt: der

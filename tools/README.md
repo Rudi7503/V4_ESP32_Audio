@@ -41,6 +41,19 @@ Solange dieser Zustand bleibt, ist das Board nicht betriebsbereit.
 
 `tools/flash_linux.sh` gibt die Meldung aus Schritt 3 selbst aus.
 
+**Regel: JEDER Flash geht ueber `tools/flash_linux.sh` — auch ein fremdes Image**
+(z. B. ein alter Stand zum Vergleich):
+
+```bash
+bash tools/flash_linux.sh                        # eigenes build/
+bash tools/flash_linux.sh /mnt/d/.../build       # beliebiges Buildverzeichnis
+```
+
+Das Skript entschaerft CRLF in `flash_args`, prueft den Erfolg am Log und gibt
+den Umsteck-Hinweis aus. Am 08.10.2026 habe ich fuer den 0.9.56-Vergleich ein
+eigenes Ad-hoc-Skript in /tmp benutzt - der Hinweis fehlte, und der Anwender
+musste mich daran erinnern ("0.9.56 laeuft jetzt muss doch umstecken").
+
 **Was sie verhindert** (am 08.10. teuer gelernt): bleibt der GPIO2-Jumper
 gesteckt, haelt DAT0 die Leitung LOW, und dann passiert beim naechsten Start:
 
