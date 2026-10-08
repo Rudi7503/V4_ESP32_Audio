@@ -28,6 +28,14 @@ V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
 
 ## Stand
 
+**0.9.76** - **Reservierung an die richtige Stelle.** 0.9.75 legte den Puffer des
+Dekoders schon beim Pipelineaufbau an (das klappte), der Puffer des linearen
+Wandlers scheiterte dort aber: `Vorab-Puffer: 'aud_lin_resample_file' hat keinen
+Ausgang` - der Ausgang entsteht erst beim Verbinden mit dem Mischer
+(`connect_branch_to_mixer`). Genau dieser Puffer fehlte dann beim Abspielen
+("groesster Block 608 Byte"). Jetzt wird er direkt nach dem Verbinden
+reserviert.
+
 **0.9.75** - **Puffer frueh reservieren.** Die Messung nach 0.9.74 zeigt: die
 *Menge* stimmt jetzt (79 628 Byte frei vor dem Start), aber der DRAM ist
 **zersplittert** - der groesste zusammenhaengende Block ist nur noch **272 Byte**

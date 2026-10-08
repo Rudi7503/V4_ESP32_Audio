@@ -1491,8 +1491,12 @@ static void setup_pipeline_local2bt(esp_gmf_pool_handle_t pool)
      * (1152 Frames x 48000/44100 x 2 Kanaele x 2 Byte = 5016, aufgerundet).
      */
     reserve_output_payload(local2bt_pipe, "aud_dec", 4608, 16u);
-    reserve_output_payload(local2bt_pipe, "aud_lin_resample_file",
-                           LIN_RESAMPLE_OUT_PAYLOAD_MAX, 16u);
+    /*
+     * Der Wandler bekommt seinen Ausgang erst beim Verbinden mit dem Mischer
+     * (connect_branch_to_mixer); dort wird sein Puffer reserviert - gemessen am
+     * 08.10.: "Vorab-Puffer: 'aud_lin_resample_file' hat keinen Ausgang", und
+     * genau dieser Puffer fehlte dann beim Abspielen.
+     */
 }
 
 /*
@@ -2009,6 +2013,11 @@ void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream)
                 return;
             }
             ret = connect_branch_to_mixer(local2bt_pipe, "aud_lin_resample_file", &file_branch_db, FILE_DB_ITEMS);
+            if (ret == ESP_GMF_ERR_OK) {
+                /* 0.9.76: jetzt existiert der Ausgang - Puffer sofort reservieren. */
+                reserve_output_payload(local2bt_pipe, "aud_lin_resample_file",
+                                       LIN_RESAMPLE_OUT_PAYLOAD_MAX, 16u);
+            }
             if (ret != ESP_GMF_ERR_OK) {
                 ESP_LOGE(TAG, "Datei-Zweig liess sich nicht an den Mischer haengen: %d", ret);
                 return;
