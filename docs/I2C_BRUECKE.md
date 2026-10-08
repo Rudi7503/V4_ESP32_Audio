@@ -163,6 +163,38 @@ in beiden Faellen 128 Byte - die Kommentare sind der Rest von Version 2.
 
 ## 6. Status: was geprueft ist - und was nicht
 
+### Die Beweislast ist ungleich verteilt
+
+Der **Gegenpart ist auf echter Hardware bewiesen, dieser Slave nicht.** Auf der V4
+lief `v4_console` gegen die *alte* ESP32-Firmware (`ESP32-I2S-to-BT`, PING meldet
+dort `fw=2`); die Mitschnitte liegen in
+`ApolloCrossDev/Projects/I2C-test/v4_master/tests/`.
+
+| Befehl | auf echter Hardware |
+|---|---|
+| PING / GET_INFO | ja - `proto=3 fw=2 write=32 read=128 bulk_max=1024 chunk=128` |
+| GET_STATUS samt `audio_flags`, `scan_gen`, `free` | ja |
+| SCAN + DEV_COUNT / DEV_GET | ja (`dev_count` 1 -> 2) |
+| CONNECT / DISCONNECT | ja |
+| SD_MOUNT / SD_INFO | ja (`free=58702602 kB`) |
+| DIR_OPEN / DIR_NEXT bis 72 bzw. 53 Eintraege, mit Seiten | ja |
+| PLAY_FILE / STOP_PLAY (`audio_flags` 0x01 <-> 0x03) | ja |
+| Byte-Order-Selbsttest auf der V4 (Big Endian) | ja, Ergebnis 1 |
+| `i2c.library` 40.0, `SendI2C`/`ReceiveI2C` an 0xA0 | ja, `0x000000FF` = OK |
+| Logdatei der V4 (`Programs:test/v4_console.log`) | ja, Schreiben bestaetigt |
+| SET_CHUNK / PATH_* / FORGET / RESET | nein - nur im Mock |
+| **FILE_OPEN / FILE_READ / FILE_CLOSE (BULK, 12+chunk)** | **nein - nie auf Hardware** |
+
+Zwei Punkte, die im README des `v4_master` noch unter "Was NICHT geprueft ist"
+stehen, sind damit erledigt: die vollstaendige §13-Abfolge (das Feldprotokoll
+zeigt Status, Scan, Verbinden, SD, Verzeichnis und Wiedergabe) und die
+Beschreibbarkeit von `Programs:test/`. Der Text dort ist aelter als der
+Mitschnitt.
+
+Was dieser Port also **nicht** vom Vorgaenger erbt, ist der BULK-Weg
+(`FILE_READ`): im Mock getestet, aber nie ueber eine echte Leitung gelaufen - auf
+keiner der beiden Seiten.
+
 **Geprueft:**
 
 * **Der ganze Firmwarestand uebersetzt fehlerfrei mit ESP-IDF v6.1 unter Linux**
