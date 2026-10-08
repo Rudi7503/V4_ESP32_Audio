@@ -1,30 +1,16 @@
-# V4_ESP32 - Audio-Bruecke ESP32 <-> Vampire V4
+## Stand
 
-Der ESP32 ist **A2DP-Quelle** (Bluetooth-Sender) und schickt zwei Tonquellen
-gemischt an einen Lautsprecher oder Kopfhoerer:
+**0.9.80** - **Dekoder-Arena: Freigabe hinter den Aufbau des Datei-Zweigs.**
+Messung aus 0.9.79 mit zwei neuen Zeilen in `local2bt_arena_release()`:
 
-1. **I2S-Eingang von der Vampire V4** (Sklave, 60000 Hz, 32 Bit, stereo) -
-   dieser Ton muss **immer** zu hoeren sein.
-2. **Dateien von der SD-Karte** (MP3, WAV), die dazugemischt werden
-   (`playfile <name>`), wahlweise auch allein.
+    Dekoder-Arena freigegeben: groesster Block 5632 -> 36864 Byte   (Luecke entsteht)
+    Nach dem Start des Datei-Zweigs: groesster Block 32768 Byte     (Aufbau nimmt ~4 KB)
 
-Dazu kommt die **Bedienung durch die Vampire ueber I2C** (Adresse 0x50):
-Bluetooth-Geraete auflisten/verbinden/trennen, SD-Karte durchsuchen, Datei
-abspielen, Status abfragen. Dieselben Dinge gehen weiterhin ueber die serielle
-Konsole.
-
-## Flashen (Kurzfassung)
-
-**Jeder Flash** laeuft ueber `tools/flash_linux.sh [Buildverzeichnis]` — auch ein
-fremdes oder altes Image zum Vergleich. Das Skript entschaerft CRLF in
-`flash_args`, prueft den Erfolg am Log und gibt danach **immer** den Hinweis
-"FLASH FERTIG - JETZT UMSTECKEN" aus: erst Jumper/Modul zurueckbauen und neu
-starten, dann ist die SD-Karte wieder da. Details in
-[`tools/README.md`](tools/README.md).
-
-**Die Vampire laeuft nur mit gestecktem ESP32-Modul.** Waehrend des Umsteckens
-ist sie stromlos - V4-Uploads (`make upload`), `make log` und Messungen gegen die
-V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
+Der MP3-Dekoder braucht rund 32 KB am Stueck - es lief also mal und mal nicht
+(Wettlauf, kein Mengenproblem: 0.9.79 spielte, 0.9.77/0.9.78 scheiterten mit
+`Fail to init MP3 decoder ret 10`). Jetzt wird erst nach dem Aufbau freigegeben,
+damit der Dekoder die vollen 36864 Byte bekommt. Anwenderbestaetigung:
+"hoere mp3 und v4 gut und zuverlaessig".
 
 ## Stand
 

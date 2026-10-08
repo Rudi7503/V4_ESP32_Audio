@@ -786,8 +786,15 @@ static const char *gmf_state_to_str(int state)
  */
 static void local2bt_play(const char *uri)
 {
-    /* 0.9.77: Arena jetzt freigeben - der Dekoder soll zusammenhaengend finden. */
-    local2bt_arena_release();
+    /*
+     * 0.9.80: Die Freigabe steht NICHT mehr hier, sondern nach dem Aufbau des
+     * Datei-Zweigs (kurz vor der Messzeile). Messung aus 0.9.79:
+     *   freigegeben        -> groesster Block 36 864
+     *   nach dem Aufbau    -> 32 768  (der Aufbau nimmt ~4 KB aus der Luecke)
+     *   Dekoder braucht ~32 KB am Stueck
+     * Mal reichte es (Wiedergabe lief), mal nicht - ein Wettlauf. Wird erst
+     * nach dem Aufbau freigegeben, hat der Dekoder die vollen 36 864 Byte.
+     */
     if (local2bt_pipe == NULL) {
         ESP_LOGE(TAG, "Datei-Pipeline ist nicht angelegt");
         return;
@@ -932,6 +939,7 @@ static void local2bt_play(const char *uri)
     s_local2bt_laeuft = true;
     snprintf(s_local2bt_uri, sizeof(s_local2bt_uri), "%s", uri);
     local2bt_lock_give();
+    local2bt_arena_release();   /* 0.9.80: erst jetzt - siehe oben */
     ESP_LOGI(TAG, "Nach dem Start des Datei-Zweigs: groesster Block %u Byte",
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 }
