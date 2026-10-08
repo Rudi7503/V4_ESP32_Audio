@@ -19,7 +19,14 @@
 #include "sd_card.h"
 
 #define SD_MOUNT_POINT         "/sdcard"
-#define SD_MAX_FILE_HANDLES    5
+/*
+ * Gleichzeitig offene Dateien im FAT-VFS (esp_vfs_fat_mount_config_t.max_files).
+ * Das I2C-Protokoll der Vampire haelt bis zu SD_FS_MAX_FILE_HANDLES (4) Dateien
+ * und SD_FS_MAX_DIR_HANDLES (2) Verzeichnisse offen, und opendir() belegt im
+ * FatFs-VFS ebenfalls einen Platz. Die frueheren 5 waren dafuer zu knapp; 8
+ * laesst Luft und kostet nur wenige hundert Byte.
+ */
+#define SD_MAX_FILE_HANDLES    8
 #define SD_MAX_FREQ_KHZ        4000
 #define SD_SPI_MAX_FREQ_KHZ    1000
 #define SD_MOUNT_ATTEMPTS      3
@@ -408,4 +415,12 @@ const char *sd_card_transport(void)
         return "nicht verbunden";
     }
     return s_over_spi ? "SPI" : "SDMMC 1 Bit";
+}
+
+uint16_t sd_card_sector_size(void)
+{
+    if (!s_mounted || s_card == NULL) {
+        return 0;
+    }
+    return (uint16_t)s_card->csd.sector_size;
 }

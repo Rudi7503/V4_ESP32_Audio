@@ -236,6 +236,15 @@ static SemaphoreHandle_t s_local2bt_lock = NULL;
  */
 static volatile bool s_local2bt_laeuft = false;
 
+/*
+ * Zuletzt angespielter URI des Datei-Zweigs (0.9.57).
+ *
+ * Wird zusammen mit s_local2bt_laeuft gesetzt und geloescht, damit das
+ * I2C-Protokoll der Vampire den laufenden Titel melden kann. Nur der
+ * Datei-Zweig schreibt hier - eine Kopie ohne Sperre genuegt deshalb.
+ */
+static char s_local2bt_uri[192];
+
 static bool local2bt_lock_take(const char *wer)
 {
     if (s_local2bt_lock == NULL) {
@@ -315,6 +324,7 @@ static void local2bt_process_stop_request(void)
         esp_gmf_pipeline_stop(local2bt_pipe);
         esp_gmf_pipeline_reset(local2bt_pipe);
         s_local2bt_laeuft = false;
+        s_local2bt_uri[0] = '\0';
     } else {
         ESP_LOGI(TAG, "Wiedergabe beendet - Datei-Zweig war schon angehalten (%s)", gmf_state_to_str(p->state));
     }
@@ -779,6 +789,7 @@ static void local2bt_play(const char *uri)
         esp_gmf_pipeline_stop(local2bt_pipe);
         esp_gmf_pipeline_reset(local2bt_pipe);
         s_local2bt_laeuft = false;
+        s_local2bt_uri[0] = '\0';
         ESP_LOGI(TAG, "Datei-Zweig angehalten und zurueckgesetzt");
     }
 
@@ -847,6 +858,7 @@ static void local2bt_play(const char *uri)
     esp_gmf_pipeline_loading_jobs(local2bt_pipe);
     esp_gmf_pipeline_run(local2bt_pipe);
     s_local2bt_laeuft = true;
+    snprintf(s_local2bt_uri, sizeof(s_local2bt_uri), "%s", uri);
     local2bt_lock_give();
 }
 
@@ -895,6 +907,37 @@ void local2bt_play_prev(void)
     }
     playlist_cur_index = (playlist_cur_index + playlist_len - 1) % playlist_len;
     local2bt_play(playlist[playlist_cur_index]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Zugriffe fuer das I2C-Protokoll der Vampire (0.9.57)                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Datei-Zweig anhalten - nur vormerken.
+ *
+ * Ausfuehren darf das NUR die stream_proc-Aufgabe: esp_gmf_pipeline_stop()
+ * wartet auf den GMF-Task, und der I2C-Task darf dabei nicht blockieren (die
+ * Antwort muss innerhalb der festen Wartezeit des Masters stehen). Deshalb
+ * setzt dieser Aufruf nur local2bt_stop_requested; local2bt_process_stop_request()
+ * raeumt auf. Der I2S-Zweig der Vampire laeuft dabei unberuehrt weiter - der
+ * Mischer mischt beide Quellen, ein Stop betrifft nur die Datei.
+ */
+void local2bt_stop(void)
+{
+    local2bt_request_stop();
+}
+
+/** @brief Laeuft gerade eine Datei aus dem Datei-Zweig? */
+bool local2bt_is_playing(void)
+{
+    return s_local2bt_laeuft;
+}
+
+/** @brief URI der laufenden Datei, oder "" wenn keine laeuft. */
+const char *local2bt_current_uri(void)
+{
+    return s_local2bt_uri;
 }
 
 static void stream_proc_destroy(stream_user_data_t *user_d)

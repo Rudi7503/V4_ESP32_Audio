@@ -8,15 +8,24 @@ gemischt an einen Lautsprecher oder Kopfhoerer:
 2. **Dateien von der SD-Karte** (MP3, WAV), die dazugemischt werden
    (`playfile <name>`), wahlweise auch allein.
 
-Dazu kommen die Bedienbefehle ueber die serielle Konsole (Bluetooth-Geraete
-auflisten/verbinden/trennen, SD-Karte durchsuchen, Wiedergabe steuern,
-Messwerte abfragen).
+Dazu kommt die **Bedienung durch die Vampire ueber I2C** (Adresse 0x50):
+Bluetooth-Geraete auflisten/verbinden/trennen, SD-Karte durchsuchen, Datei
+abspielen, Status abfragen. Dieselben Dinge gehen weiterhin ueber die serielle
+Konsole.
 
 ## Stand
 
-**0.9.39** - MP3 und WAV klingen sauber, auch im schnellen Wechsel
+**0.9.57** - I2C-Bruecke zur Vampire V4 eingebaut (Protokoll v3, Slave 0x50 auf
+SDA=GPIO18/SCL=GPIO23). Der Code ist aus dem erprobten Vorgaengerprojekt
+uebernommen und statisch geprueft, aber **noch nicht mit ESP-IDF uebersetzt und
+noch nie auf Hardware gelaufen** - siehe
+[`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md) fuer den genauen Pruefstand, die
+Unterschiede zum Vorgaenger und die Inbetriebnahme.
+
+**0.9.39 bis 0.9.56** - MP3 und WAV klingen sauber, auch im schnellen Wechsel
 (acht Titel im 6-Sekunden-Takt), die Vampire ist durchgehend zu hoeren.
-Im Referenzlauf: 0 Resets, 0 Job-Fehler.
+Im Referenzlauf: 0 Resets, 0 Job-Fehler. Dazu SD-Ausfall behoben (fehlender
+Pull-up auf DAT0) und der Equalizer hinter dem Mischer.
 
 Die vollstaendige Messreihe mit allen Fehlern, Ursachen und Belegen steht in
 [`docs/MESSREIHE.md`](docs/MESSREIHE.md) - inklusive der Messwerte, die den
@@ -26,8 +35,10 @@ Weg gewiesen haben (Durchsatz, Ringpuffer im 2-ms-Raster, Selbsttest 1:1).
 
 ```
 I2S (Vampire) --> io_i2s --> aud_lin_resample -----------\
-                                                          >-- aud_mixer --> aud_enc_mix --> io_bt --> A2DP
+                                                          >-- aud_mixer --> aud_eq --> aud_enc_mix --> io_bt --> A2DP
 SD-Karte --> io_file --> aud_dec --> aud_lin_resample_file /
+
+I2C (Vampire, Master) --> v4_link (Slave 0x50) --> bt_manager / sd_fs / audio_source
 ```
 
 * **`aud_lin_resample`** ist ein eigenes GMF-Element
@@ -43,6 +54,9 @@ SD-Karte --> io_file --> aud_dec --> aud_lin_resample_file /
 
 * Die A2DP-Abtastrate wird mit der Senke ausgehandelt (44100 oder 48000) und
   beim Stream-Start in die Kette uebernommen.
+
+* **Der I2C-Weg ist Zusatz.** Faellt er aus, laeuft die Tonbruecke weiter:
+  `v4_link_init()` wird in `app_main` bewusst ohne `ESP_ERROR_CHECK` aufgerufen.
 
 ## Bauen, Flashen, Testen
 
@@ -65,26 +79,48 @@ Messfaelle (`-Mode`): 0 = nur Datei-Zweig, 1 = I2S mit GMF-Wandlern,
 2 = I2S mit eigenem linearem Wandler (**Vorgabe**), 3 = GMF-Bitwandler vor der
 GMF-Ratenwandlung, 4 = gesperrt (Absturz in `aud_rate_cvt_i2s`).
 
-## Konsolenbefehle (Auszug)
+## Konsolenbefehle
+
+Die Liste ist aus der Registrierung in [`main/cmd_reg.c`](main/cmd_reg.c)
+uebernommen (die frueheren Befehle `bufstat`, `i2sstat` und `i2smode` gibt es
+seit dem Aufraeumen in 0.9.40/0.9.41 nicht mehr):
 
 ```
-version            Version und Takt
-free               Speicher: frei, Minimum, groesster Block, je Heap-Bereich
-tasks              Laufzeitstatistik der Aufgaben
-playfile <datei>   Datei von der SD-Karte in den Mischer spielen
-start_media        A2DP-Stream starten
-connect <MAC>      Senke verbinden        disconnect   trennen
-sd_ls              SD-Karte auflisten     sd_mount     einbinden
-bufstat [reset]    Ringpuffer-Statistik   i2sstat      I2S-Eingang
-i2smode [0..4]     Messfall (im NVS)      restart      Neustart
-log_level <tag> <stufe>
+Ton und Bluetooth
+  playfile <datei>   Datei von der SD-Karte in den Mischer spielen
+  play|pause|stop|next|prev    AVRCP-Kommandos an die Gegenseite
+  start_media        A2DP-Stream starten   stop_media   anhalten
+  i2s_media [off]    I2S-Zweig (Vampire) ein-/ausschalten
+  mixer              Wartezeiten des Mischers lesen/setzen
+  connect <MAC>      Senke verbinden       disconnect   trennen
+  start_discovery [name]   Geraetesuche    stop_discovery
+  metadata [maske]   Titelinfos anfordern
+  vol_set <0..100> | vol_up | vol_down
+
+SD-Karte und System
+  sd_mount           SD-Karte einbinden    sd_unmount   auswerfen
+  sd_ls [pfad]       Verzeichnis auflisten
+  sdreg | sdpins | scanpins | sd_mount_spi    Diagnose (SD, Leitungen)
+  eq ...             Equalizer hinter dem Mischer
+  version            Version und Takt
+  free | tasks | log_level <tag|*> <stufe> | restart
+
+I2C-Bruecke zur Vampire (neu in 0.9.57)
+  v4_bus             Buszustand: Leitungen und Zaehler (Verdrahtung vs. Rahmen)
+  v4_selftest        Befehlskette einmal ohne I2C-Master durchfahren
 ```
 
 ## Offene Punkte
 
+* **Die I2C-Bruecke ist ungeprueft**: nie mit ESP-IDF uebersetzt, nie geflasht,
+  nie mit einer Vampire gesprochen. Erster Schritt nach dem Flashen sind
+  `v4_bus` und `v4_selftest` - siehe
+  [`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md), Abschnitt 7.
 * Diagnosezeilen (`Block n: in_frames=...`, Durchsatz, 2-ms-Raster) sind noch
   aktiv; sie kosten UART-Zeit im Audio-Task und sollten fuer den Dauerbetrieb
   abschaltbar sein.
-* I2C-Protokoll zur Vampire V4 (Bedienung/Status) ist noch nicht umgesetzt.
+* Nach `start_media` kann das erste `playfile` einmal mit "Got NULL Pointer" im
+  Resampler-Ausgangsport scheitern; der Datei-Zweig sollte erst starten, wenn
+  die Mischer-Pipeline `RUNNING` meldet.
 * Die Messfaelle 1 und 3 (GMF-Wandler) laufen, sind aber nicht mehr der
   bevorzugte Weg.

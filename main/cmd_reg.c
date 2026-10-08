@@ -43,6 +43,7 @@
 
 #include "esp_bt_audio_defs.h"
 #include "esp_bt_audio_classic.h"
+#include "v4_link.h"
 #include "esp_bt_audio_le.h"
 #include "esp_bt_audio_vol.h"
 #include "esp_bt_audio_media.h"
@@ -1808,6 +1809,36 @@ static int cmd_version(int argc, char **argv)
     return 0;
 }
 
+/*
+ * Bring-up-Hilfen fuer die I2C-Bruecke zur Vampire V4 (0.9.57).
+ *
+ * v4_selftest faehrt die echte Befehlskette einmal ohne I2C-Master durch:
+ * Rahmen bauen -> pruefen -> verteilen -> Antwortrahmen bauen -> pruefen,
+ * einschliesslich der BUSY-Runde und des BULK-Rahmens. Nur die I2C-Leitung
+ * selbst bleibt ungeprueft. Damit laesst sich die Strecke VOR dem Anschluss der
+ * Vampire pruefen.
+ *
+ * v4_bus zeigt, ob ueberhaupt etwas auf dem Bus ankommt. "nichts angekommen"
+ * (Verdrahtung, Adresse) und "angekommen, aber verworfen" (Takt, Rahmen) sind
+ * zwei verschiedene Fehler mit entgegengesetzter Ursache - deshalb wird beides
+ * getrennt gezaehlt.
+ */
+static int cmd_v4_selftest(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    v4_link_selftest();
+    return 0;
+}
+
+static int cmd_v4_bus(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    v4_link_bus_report();
+    return 0;
+}
+
 void cli_register_sys()
 {
     static const esp_console_cmd_t cmds[] = {
@@ -1888,6 +1919,18 @@ void cli_register_sys()
             .help = "List a directory on the microSD card",
             .hint = "[path]",
             .func = &cmd_sd_ls,
+        },
+        {
+            .command = "v4_selftest",
+            .help = "Drive the V4 I2C command path once without a master",
+            .hint = NULL,
+            .func = &cmd_v4_selftest,
+        },
+        {
+            .command = "v4_bus",
+            .help = "Report the I2C bus state to the Vampire (wiring vs. framing)",
+            .hint = NULL,
+            .func = &cmd_v4_bus,
         }};
 
     for (int i = 0; i < sizeof(cmds) / sizeof(esp_console_cmd_t); i++) {

@@ -5,6 +5,9 @@
  */
 #pragma once
 
+#include <stdint.h>
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -33,6 +36,13 @@ esp_err_t sd_card_mount(void);
  * @brief  Which transport the mounted card uses ("SDMMC 1 Bit" or "SPI")
  */
 const char *sd_card_transport(void);
+
+/**
+ * @brief  Sector size of the mounted card in bytes (0 when nothing is mounted)
+ *
+ * Das I2C-Protokoll der Vampire meldet die Sektorgroesse in SD_INFO.
+ */
+uint16_t sd_card_sector_size(void);
 
 /**
  * @brief  Unmount the card if it is mounted

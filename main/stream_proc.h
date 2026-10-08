@@ -63,6 +63,31 @@ void local2bt_play_prev(void);
  */
 void local2bt_play_file(const char *uri);
 
+/* ------------------------------------------------------------------ */
+/* Zugriffe fuer das I2C-Protokoll der Vampire (0.9.57)                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Datei-Zweig anhalten
+ *
+ * Setzt nur den Wunsch; ausgefuehrt wird er in der stream_proc-Aufgabe. Der
+ * I2S-Eingang der Vampire laeuft weiter - der Mischer traegt beide Quellen,
+ * ein Stop betrifft nur die Datei.
+ */
+void local2bt_stop(void);
+
+/**
+ * @brief  Laeuft der Datei-Zweig gerade?
+ *
+ * Liest den eigenen Merker des Projekts, NICHT esp_gmf_pipeline_t::state -
+ * dieses Feld hat sich als unzuverlaessig erwiesen (siehe local2bt_play in
+ * stream_proc.c).
+ */
+bool local2bt_is_playing(void);
+
+/** @brief URI der laufenden Datei, oder "" wenn keine laeuft. */
+const char *local2bt_current_uri(void);
+
 /**
  * @brief  Ask for the I2S input (Vampire) to be sent to Bluetooth
  *

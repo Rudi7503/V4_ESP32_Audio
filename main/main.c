@@ -34,10 +34,13 @@
 #include "cmd_reg.h"
 #include "pool_reg.h"
 #include "sd_card.h"
+#include "sd_fs.h"
 #include "i2s_input.h"
 #include "stream_proc.h"
 #include "codec_defs.h"
 #include "version.h"
+#include "bt_manager.h"
+#include "v4_link.h"
 
 /* Sendevorgang des A2DP-Senders: eigener Task auf Kern 1. */
 #define A2DP_SRC_SEND_TASK_CORE_ID     1
@@ -269,6 +272,9 @@ static void bt_audio_event_cb(esp_bt_audio_event_t event, void *event_data, void
             esp_bt_audio_event_discovery_st_t *discovery_state = (esp_bt_audio_event_discovery_st_t *)event_data;
             ESP_LOGI(TAG, "Device Discovery State Changed: %s",
                      discovery_state->discovering ? "Discovering" : "Not discovering");
+            /* Der I2C-Master fragt "scan_active" ab und will wissen, wann die
+             * Liste fertig ist - deshalb hierher weiterreichen. */
+            bt_mgr_evt_discovery(discovery_state->discovering);
             break;
         }
         case ESP_BT_AUDIO_EVENT_DEVICE_DISCOVERED: {
@@ -280,6 +286,10 @@ static void bt_audio_event_cb(esp_bt_audio_event_t event, void *event_data, void
                      device_discovered->rssi);
             if (device_discovered->tech == ESP_BT_AUDIO_TECH_CLASSIC) {
                 ESP_LOGI(TAG, "  CoD: 0x%06x", device_discovered->disc_data.classic.cod);
+                /* Nur Classic-Geraete in die Tabelle des I2C-Protokolls: die
+                 * V4 steuert eine A2DP-Senke an, LE-Geraete kann sie damit
+                 * nicht verbinden. */
+                bt_mgr_evt_discovered(device_discovered->name, device_discovered->addr);
             }
             cli_bt_device_found(device_discovered->name, device_discovered->addr);
             break;
@@ -295,11 +305,13 @@ static void bt_audio_event_cb(esp_bt_audio_event_t event, void *event_data, void
              * sichtbar, damit sich ein anderes Geraet verbinden kann.
              */
             esp_bt_audio_classic_set_scan_mode(!conn_st->connected, false);
+            bt_mgr_evt_connection(conn_st->connected, conn_st->addr);
             cli_bt_device_conn_st_chg(conn_st->addr, conn_st->connected);
             break;
         }
         case ESP_BT_AUDIO_EVENT_STREAM_STATE_CHG: {
             esp_bt_audio_event_stream_st_t *stream_state = (esp_bt_audio_event_stream_st_t *)event_data;
+            bt_mgr_evt_stream(stream_state->state == ESP_BT_AUDIO_STREAM_STATE_STARTED);
             stream_proc_state_chg(stream_state->stream_handle, stream_state->state);
             break;
         }
@@ -363,8 +375,13 @@ void app_main(void)
     setup_volume_ctrl_task();
 
     /* Die SD-Karte muss vor dem ersten Medienstart bereitstehen. Fehlt sie,
-     * laeuft Bluetooth trotzdem - nur die lokale Wiedergabe fehlt. */
-    if (sd_card_mount() != ESP_OK) {
+     * laeuft Bluetooth trotzdem - nur die lokale Wiedergabe fehlt.
+     *
+     * Gemountet wird ueber sd_fs_mount() (das seinerseits sd_card_mount()
+     * aufruft): nur so wird die Kapazitaet fuer SD_INFO/GET_STATUS des
+     * I2C-Protokolls gleich beim Start einmal gemerkt. Der Mount selbst bleibt
+     * damit an genau einer Stelle - in sd_card.c. */
+    if (sd_fs_mount() != ESP_OK) {
         ESP_LOGW(TAG, "SD card not mounted - local playback will fail");
         ESP_LOGW(TAG, "  Falls das Modul ausserhalb der Platine sitzt: nach dem Einbau 'sd_mount' senden.");
     }
@@ -395,6 +412,19 @@ void app_main(void)
 
     /* Sichtbar und koppelbar, damit sich die Senke verbinden kann. */
     ESP_ERROR_CHECK(esp_bt_audio_classic_set_scan_mode(true, false));
+
+    /*
+     * Bruecke zur Vampire V4: erst die Zustands-/Geraeteliste fuer Bluetooth,
+     * dann der I2C-Slave (Adresse 0x50, SDA=GPIO18, SCL=GPIO23 - siehe
+     * PIN verbindungen.txt). Beides ist Zusatz zur Tonbruecke: faellt der
+     * I2C-Weg aus, soll der A2DP-Sender trotzdem laufen, deshalb hier kein
+     * ESP_ERROR_CHECK.
+     */
+    ESP_ERROR_CHECK(bt_mgr_init());
+    esp_err_t v4_err = v4_link_init();
+    if (v4_err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C-Bruecke zur Vampire V4 nicht gestartet: %s", esp_err_to_name(v4_err));
+    }
 
     /* Wiedergabe-Statusmeldungen sind Sache einer A2DP-SENKE (sie melden, was
      * die Gegenstelle tut). Als Quelle registrieren wir sie nicht - der Aufruf
