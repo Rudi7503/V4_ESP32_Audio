@@ -271,8 +271,42 @@ typedef enum {
      */
     V4P_CMD_MEDIA_START   = 0x62,   /* -            -> -  (start A2DP stream)  */
 
+    /*
+     * Equalizer hinter dem Mischer (0.9.72).
+     *
+     * Bis 0.9.71 gab es dafuer nur Konsolenbefehle - und keinen Weg, die
+     * Einstellung ZURUECKZULESEN (in docs/I2C_ERWEITERN.md als Luecke
+     * vermerkt). Der Block 0x70..0x73 ist dafuer reserviert.
+     */
+    V4P_CMD_EQ_INFO       = 0x70,   /* -            -> bands u8, aktiv u8      */
+    V4P_CMD_EQ_BANDS      = 0x71,   /* [aktiv u8]   -> aktiv u8               */
+    V4P_CMD_EQ_GET        = 0x72,   /* [idx u8]     -> v4p_eq_band_t          */
+    V4P_CMD_EQ_SET        = 0x73,   /* [idx u8][typ u8][fc u32][q u16][gain s16] -> - */
+
     V4P_CMD_RESET         = 0x7E,   /* -            -> -  (soft protocol reset)*/
 } v4p_cmd_t;
+/*
+ * Ein Equalizer-Band auf der Leitung (v4p_eq_band_t, 12 Byte, little-endian).
+ *
+ *   +0  idx      u8    Bandindex 0..bands-1
+ *   +1  typ      u8    1 HighPass, 2 LowPass, 3 Peak, 4 HighShelf, 5 LowShelf
+ *   +2  enabled  u8    1 = dieses Band filtert
+ *   +3  reserved u8    0
+ *   +4  fc       u32  Grenz-/Mittenfrequenz in Hz
+ *   +8  q        u16  Guete Q x 100   (Q 0,70 -> 70)
+ *   +10 gain     s16  Verstaerkung in dB x 10, vorzeichenbehaftet
+ *
+ * Q und Gain als Ganzzahlen, damit beide Seiten ohne Fliesskomma ueberein
+ * kommen (die V4 ist Big Endian, der ESP32 Little Endian).
+ */
+#define V4P_EQ_BAND_LEN        12
+#define V4P_EQ_OFF_IDX          0
+#define V4P_EQ_OFF_TYP          1
+#define V4P_EQ_OFF_ENABLED      2
+#define V4P_EQ_OFF_FC           4
+#define V4P_EQ_OFF_Q            8
+#define V4P_EQ_OFF_GAIN        10
+
 
 /* ------------------------------------------------------------------ */
 /* Payload layouts                                                    */

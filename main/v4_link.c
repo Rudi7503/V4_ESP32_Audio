@@ -1027,6 +1027,86 @@ static void dispatch(uint8_t cmd, uint8_t seq, const uint8_t *p, uint8_t plen,
         *defer = DEFER_SD_STOP;
         break;
 
+    case V4P_CMD_EQ_INFO: {
+        int bands = 0, active = 0;
+        if (stream_proc_eq_info(&bands, &active) != 0) {
+            status = V4P_ST_BAD_STATE;      /* kein Equalizer im Pool */
+            break;
+        }
+        pbuf[0] = (uint8_t)bands;
+        pbuf[1] = (uint8_t)active;
+        pbuf[2] = V4P_EQ_BAND_LEN;          /* Selbstauskunft des Bandformats */
+        pbuf[3] = 0;
+        plen_out = 4;
+        break;
+    }
+
+    case V4P_CMD_EQ_BANDS: {
+        if (plen < 1) {
+            status = V4P_ST_BAD_ARG;
+            break;
+        }
+        int n = stream_proc_eq_set_bands((int)p[0]);
+        if (n < 0) {
+            status = V4P_ST_BAD_ARG;
+            break;
+        }
+        pbuf[0] = (uint8_t)n;
+        plen_out = 1;
+        break;
+    }
+
+    case V4P_CMD_EQ_GET: {
+        int      typ = 0;
+        unsigned fc  = 0;
+        float    q = 0.0f, gain = 0.0f;
+        int      bands = 0, active = 0;
+
+        if (plen < 1) {
+            status = V4P_ST_BAD_ARG;
+            break;
+        }
+        if (stream_proc_eq_get((int)p[0], &typ, &fc, &q, &gain) != 0) {
+            status = V4P_ST_BAD_ARG;
+            break;
+        }
+        (void)stream_proc_eq_info(&bands, &active);
+
+        /*
+         * Q und Gain als Ganzzahlen (Q x 100, dB x 10): die V4 ist Big Endian,
+         * der ESP32 Little Endian - so gibt es keinen Fliesskomma-Austausch.
+         */
+        memset(pbuf, 0, V4P_EQ_BAND_LEN);
+        pbuf[V4P_EQ_OFF_IDX]     = p[0];
+        pbuf[V4P_EQ_OFF_TYP]     = (uint8_t)typ;
+        pbuf[V4P_EQ_OFF_ENABLED] = ((int)p[0] < active) ? 1 : 0;
+        v4p_put_u32le(&pbuf[V4P_EQ_OFF_FC], fc);
+        v4p_put_u16le(&pbuf[V4P_EQ_OFF_Q], (uint16_t)(int16_t)(q * 100.0f + (q >= 0 ? 0.5f : -0.5f)));
+        v4p_put_u16le(&pbuf[V4P_EQ_OFF_GAIN],
+                      (uint16_t)(int16_t)(gain * 10.0f + (gain >= 0 ? 0.5f : -0.5f)));
+        plen_out = V4P_EQ_BAND_LEN;
+        break;
+    }
+
+    case V4P_CMD_EQ_SET: {
+        if (plen < V4P_EQ_BAND_LEN - 2) {   /* idx,typ,fc,q,gain = 10 Byte */
+            status = V4P_ST_BAD_ARG;
+            break;
+        }
+        uint8_t  idx  = p[0];
+        uint8_t  typ  = p[1];
+        uint32_t fc   = v4p_get_u32le(&p[2]);
+        int16_t  q100 = (int16_t)v4p_get_u16le(&p[6]);
+        int16_t  g10  = (int16_t)v4p_get_u16le(&p[8]);
+
+        if (stream_proc_eq_set((int)idx, (int)typ, (unsigned)fc,
+                               (float)q100 / 100.0f, (float)g10 / 10.0f) < 0) {
+            status = V4P_ST_BAD_ARG;
+            break;
+        }
+        break;                              /* OK, kein Nutzdatenteil */
+    }
+
     case V4P_CMD_MEDIA_START: {
         if (bt_mgr_audio_streaming()) {
             s_media_err = V4P_ST_OK;

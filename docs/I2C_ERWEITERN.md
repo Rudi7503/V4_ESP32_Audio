@@ -18,6 +18,7 @@ Konsolenprogramm eine Bedienung:
 | Karte | `SD_MOUNT` 0x30, `SD_INFO` 0x31, `SET_CHUNK` 0x32 |
 | Pfad/Dateien | `PATH_CLEAR` 0x38, `PATH_APPEND` 0x39, `DIR_OPEN` 0x40, `DIR_NEXT` 0x41, `DIR_CLOSE` 0x42, `FILE_OPEN` 0x50, `FILE_READ` 0x51, `FILE_CLOSE` 0x52 |
 | Wiedergabe | `PLAY_FILE` 0x60, `STOP_PLAY` 0x61, `MEDIA_START` 0x62, `RESET` 0x7E |
+| Equalizer | `EQ_INFO` 0x70, `EQ_BANDS` 0x71, `EQ_GET` 0x72, `EQ_SET` 0x73 |
 
 ## 2. Die Luecken - Konsolenbefehl gegen Protokoll
 
@@ -33,7 +34,7 @@ Aufruf, den es schon gibt, wird nur im Dispatch von `v4_link.c` eingetragen.
 | `playfile <datei>` | `PLAY_FILE` | - | - |
 | `start_media` | `MEDIA_START` 0x62 | erledigt (0.9.65) | erledigt (`v4_media_start()`, Konsole startet vor `PLAY_FILE`) |
 | **`stop_media`** | **fehlt** | klein: `esp_bt_audio_media_stop()` | offen - `STOP_PLAY` haelt nur die Datei an, die Uebertragung laeuft weiter (so gewollt: der Vampire-Ton bleibt) |
-| **`eq list/bands/set`** | **fehlt** | klein + **Lese-Rueckweg fehlt** (`stream_proc_eq_list` druckt nur) | neu, mit Nutzlast-Layout |
+| `eq list/bands/set` | `EQ_INFO`/`EQ_BANDS`/`EQ_GET`/`EQ_SET` | erledigt (0.9.73): `stream_proc_eq_info/eq_get` als Lese-Rueckweg, vier Handler in `v4_link.c` | erledigt (Menue (e)qualizer, Testfall §15) |
 | `i2s_media [off]` | mit `MEDIA_START` 0x62 erledigt (0.9.67) | erledigt: `media_start_wait()` ruft `i2s2bt_request()` vor dem Streamstart - ohne den Wunsch bindet der Stream die Datei-Pipeline ohne BT-Ausgang, und es ist nichts hoerbar | `stop_media` fehlt weiterhin |
 | `mixer` (lesen/setzen) | fehlt | klein: `i2s2bt_set/get_mixer_wait()` | neu |
 | `vol_set` / `vol_up` / `vol_down` | fehlt | klein: `esp_bt_audio_vol_set_*()` | neu |

@@ -2253,6 +2253,53 @@ static esp_gmf_element_handle_t eq_element(void)
     return eq;
 }
 
+/*
+ * Wie viele Baender gerade filtern. Wird hier mitgefuehrt, weil die
+ * esp_ae_eq-Schnittstelle zwar setzen, aber den Schaltzustand nicht abfragen
+ * laesst; Vorgabe ist "alle Baender an" (so legt pool_reg.c sie an).
+ */
+static int s_eq_active = MIXER_EQ_BANDS;
+
+int stream_proc_eq_info(int *bands, int *active)
+{
+    if (eq_element() == NULL) {
+        return -1;
+    }
+    if (bands != NULL) {
+        *bands = MIXER_EQ_BANDS;
+    }
+    if (active != NULL) {
+        *active = s_eq_active;
+    }
+    return 0;
+}
+
+int stream_proc_eq_get(int idx, int *typ, unsigned *fc, float *q, float *gain)
+{
+    esp_gmf_element_handle_t eq = eq_element();
+    esp_ae_eq_filter_para_t  para = {0};
+
+    if (eq == NULL || idx < 0 || idx >= MIXER_EQ_BANDS) {
+        return -1;
+    }
+    if (esp_gmf_eq_get_para(eq, (uint8_t)idx, &para) != ESP_GMF_ERR_OK) {
+        return -1;
+    }
+    if (typ != NULL) {
+        *typ = (int)para.filter_type;
+    }
+    if (fc != NULL) {
+        *fc = (unsigned)para.fc;
+    }
+    if (q != NULL) {
+        *q = para.q;
+    }
+    if (gain != NULL) {
+        *gain = para.gain;
+    }
+    return 0;
+}
+
 int stream_proc_eq_set_bands(int n)
 {
     if (n < 0 || n > MIXER_EQ_BANDS) {
@@ -2270,6 +2317,7 @@ int stream_proc_eq_set_bands(int n)
             return -1;
         }
     }
+    s_eq_active = n;
     ESP_LOGI(TAG, "EQ: %d von %d Baendern aktiv", n, MIXER_EQ_BANDS);
     return n;
 }

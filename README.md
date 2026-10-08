@@ -24,6 +24,17 @@ starten, dann ist die SD-Karte wieder da. Details in
 
 ## Stand
 
+**0.9.73** - **Equalizer ueber I2C.** Neu im Vertrag: `EQ_INFO` (0x70),
+`EQ_BANDS` (0x71), `EQ_GET` (0x72) und `EQ_SET` (0x73). Damit schliesst sich die
+Luecke aus [`docs/I2C_ERWEITERN.md`](docs/I2C_ERWEITERN.md) - bisher gab es den
+Equalizer nur als Konsolenbefehl, und die Einstellung liess sich nicht
+zuruecklesen: `stream_proc_eq_info()` und `stream_proc_eq_get()` liefern sie
+jetzt als Daten. Q wird als Guete x 100, Gain als dB x 10 uebertragen, damit
+Big-Endian-V4 und Little-Endian-ESP32 ohne Fliesskomma auskommen
+(`V4P_EQ_OFF_*`). Die V4-Seite hat die Master-API, den Mock, den Testfall §15
+und im Konsolenmenue den Punkt **(e)qualizer** (Baender anzeigen und stellen).
+**Noch nicht auf Hardware geprueft.**
+
 **0.9.71** - **Bitpool-Messschalter.** Die CPU-Messung mit `bufs` zeigt: der
 Mischer-Task braucht **31 % der Gesamt-CPU, auch ohne jede Quelle** (also
 ≈62 % von Kern 1) - das ist der **SBC-Encoder**; der Equalizer kostet dagegen

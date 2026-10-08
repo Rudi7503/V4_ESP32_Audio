@@ -192,3 +192,17 @@ int stream_proc_eq_set(int idx, int typ, unsigned fc, float q, float gain);
  */
 void stream_proc_eq_list(void);
 
+/**
+ * @brief Anzahl Baender und Anzahl aktiver Baender (0.9.72).
+ * @return 0 bei Erfolg, -1 wenn der Equalizer fehlt
+ */
+int stream_proc_eq_info(int *bands, int *active);
+
+/**
+ * @brief Ein Band auslesen (0.9.72).
+ * @param[out] typ  1..5 (0 = unbekannt)
+ * @param[out] fc   Hz, q Guete, gain dB
+ * @return 0 bei Erfolg, -1 bei ungueltigem Index oder fehlendem Equalizer
+ */
+int stream_proc_eq_get(int idx, int *typ, unsigned *fc, float *q, float *gain);
+

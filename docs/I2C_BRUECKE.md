@@ -232,6 +232,7 @@ dort `fw=2`); die Mitschnitte liegen in
 | DIR_OPEN / DIR_NEXT bis 72 bzw. 53 Eintraege, mit Seiten | ja |
 | PLAY_FILE / STOP_PLAY (`audio_flags` 0x01 <-> 0x03) | ja |
 | MEDIA_START (0x62) | nein - auf Hardware noch nicht geschickt (0.9.65) |
+| EQ_INFO / EQ_BANDS / EQ_GET / EQ_SET (0x70..0x73) | nein - auf Hardware noch nicht geschickt (0.9.73) |
 | Byte-Order-Selbsttest auf der V4 (Big Endian) | ja, Ergebnis 1 |
 | `i2c.library` 40.0, `SendI2C`/`ReceiveI2C` an 0xA0 | ja, `0x000000FF` = OK |
 | Logdatei der V4 (`Programs:test/v4_console.log`) | ja, Schreiben bestaetigt |
