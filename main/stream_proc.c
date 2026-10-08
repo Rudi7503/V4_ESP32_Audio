@@ -1569,15 +1569,17 @@ static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
  */
 #define MIXER_PROC_BYTES    1024
 /*
- * I2S-Zweig: 12 -> 10 KB (0.9.63).
+ * I2S-Zweig: 12 KB (0.9.69 wieder 12).
  *
- * Der Puffer stand bei 20 KB durchgehend auf 100 % (Minimum 18560 von 20480),
- * 12 KB decken bei 176400 Byte/s rund 70 ms ab, 10 KB rund 58 ms - fuer die
- * Uebergabe zwischen zwei Aufgaben auf demselben Kern weiterhin reichlich.
- * Die 2 KB fehlten dem MP3-Dekoder (docs/MP3_STARTFEHLER.md). Falls der Ton
- * der Vampire dadurch Aussetzer zeigt, ist das die erste Stellschraube.
+ * In 0.9.63 wurden hier 2 KB fuer den MP3-Dekoder abgezweigt (10 statt 12 KB).
+ * Feldmeldung vom 08.10.2026: "sound ist kratzig" - genau die Aussetzer, vor
+ * denen der Kommentar damals gewarnt hat ("erste Stellschraube"). Der Puffer
+ * stand bei 20 KB durchgehend auf 100 % (Minimum 18560 von 20480), 12 KB decken
+ * bei 176400 Byte/s rund 70 ms ab. Die 2 KB kommen jetzt aus den Aufgaben-Stacks
+ * der I2C-Bruecke (V4_TASK_STACK), die bei echtem V4-Verkehr nur 2352 Byte
+ * belegen (Mitschnitt /tmp/v4_traffic.log: 3792 von 6144 frei).
  */
-#define MIXER_DB_ITEMS      10
+#define MIXER_DB_ITEMS      12
 #define MIXER_DB_ITEM_SIZE  1024
 /*
  * Der Datei-Zweig bekommt nur 4 KB (0.9.31).

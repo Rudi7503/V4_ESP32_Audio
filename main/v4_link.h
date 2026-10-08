@@ -56,7 +56,15 @@ extern "C" {
 #define V4_RX_BUF_DEPTH         64
 #define V4_RX_QUEUE_LEN         4
 #define V4_WORK_QUEUE_LEN       4
-#define V4_TASK_STACK           6144
+/*
+ * 6144 -> 5120 (0.9.69): Die 2 KB gehen an den I2S-Ringpuffer zurueck, der den
+ * Ton der Vampire glatt haelt. Gemessen mit echtem V4-Verkehr (225 PLAY_FILE,
+ * 1024 Rahmen): der tiefste Stand war 3792 Byte frei von 6144, es wurden also
+ * 2352 Byte gebraucht - mit 5120 bleiben rund 2,7 KB Reserve.
+ * 'v4_bus' zeigt den kleinsten Rest seit dem Start; faellt er unter ~1 KB,
+ * gehoert der Stack wieder erhoeht.
+ */
+#define V4_TASK_STACK           5120
 #define V4_TASK_PRIO            6
 
 /**

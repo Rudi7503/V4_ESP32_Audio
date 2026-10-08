@@ -15,6 +15,15 @@ Konsole.
 
 ## Stand
 
+**0.9.69** - **I2S-Ringpuffer wieder 12 KB.** In 0.9.63 wurden hier 2 KB fuer den
+MP3-Dekoder abgezweigt (10 statt 12 KB); Feldmeldung vom 08.10.2026: *"sound ist
+kratzig"* - genau die Aussetzer, vor denen der Kommentar damals gewarnt hat. Die
+2 KB kommen jetzt aus den Aufgaben-Stacks der I2C-Bruecke (`V4_TASK_STACK` 6144 ->
+5120), die bei echtem V4-Verkehr nur 2352 Byte belegen (Mitschnitt
+`/tmp/v4_traffic.log`: 3792 von 6144 frei) - mit 5120 bleiben rund 2,7 KB
+Reserve, und `v4_bus` zeigt sie weiterhin an. Die DRAM-Bilanz bleibt damit
+unveraendert, der MP3-Startfehler also weiter behoben.
+
 **0.9.68** - **Die Vampire ist sofort hoerbar.** Bisher startete die
 Uebertragung erst durch einen Anstoss (`MEDIA_START`, `PLAY_FILE`,
 `start_media`); nach einem Reset schwieg die V4, bis der erste Titel lief
