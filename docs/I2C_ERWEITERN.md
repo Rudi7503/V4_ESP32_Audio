@@ -41,13 +41,15 @@ Aufruf, den es schon gibt, wird nur im Dispatch von `v4_link.c` eingetragen.
 | `sd_unmount` | fehlt | klein: `sd_fs_unmount()` | neu |
 | `free` / `tasks` | fehlt | klein: `esp_get_free_heap_size()` usw. | neu (besser **ein** `GET_DIAG`) |
 | `log_level`, `restart` | fehlt | klein: `esp_log_level_set()`, `esp_restart()` | neu |
-| `sdreg`, `sdpins`, `scanpins`, `sd_mount_spi`, `v4_selftest`, `v4_bus` | - | **nicht vorsehen** | - |
+| `sdreg`, `sdpins`, `scanpins`, `sd_mount_spi` | - | **entfernt (0.9.58/0.9.59)** | - |
+| `v4_selftest`, `v4_bus` | - | bleibt: Bring-up-Hilfen fuer **diese** Bruecke, nur ueber die Konsole | - |
 | `hf_*`, `call_*`, `pb_fetch`, `le_*` | - | **nicht vorsehen** | - |
 
-Die letzten beiden Zeilen sind Absicht: die Platinendiagnose gehoert nicht auf
-den Bus (sie treibt GPIOs und Register), und HFP/Telefonbuch/LE Audio gehoeren
-nicht zu einem A2DP-Sender. Sie ueber I2C erreichbar zu machen, vergroessert nur
-die Angriffsflaeche.
+Die letzte Zeile ist Absicht: HFP/Telefonbuch/LE Audio gehoeren nicht zu einem
+A2DP-Sender. Sie ueber I2C erreichbar zu machen, vergroessert nur die
+Angriffsflaeche. Die Platinendiagnose in der Zeile darueber ist inzwischen
+komplett aus dem Projekt entfernt (sie hat den fehlenden DAT0-Pull-up gefunden
+und wurde danach nicht mehr gebraucht) - sie war nie fuer den Bus gedacht.
 
 ## 3. Fuer **einen** neuen Befehl ist das zu tun
 

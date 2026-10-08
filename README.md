@@ -15,6 +15,19 @@ Konsole.
 
 ## Stand
 
+**0.9.59** - Die Platinen-Diagnosekommandos entfernt: `sdreg` (189 Zeilen),
+`sdpins` (132), `sd_mount_spi` (85) und `scanpins` (35), zusammen mit ihren
+Helfern (`sdreg_fsm`, `sdreg_cmd8_test`, `sdtrace_task`, `sdreg_lage`,
+`sdreg_wait_reset`) und den Includes, die nur sie brauchten. Sie haben ihren
+Zweck erfuellt: mit `sdpins` und `sdreg` wurde der fehlende DAT0-Pull-up
+gefunden, `scanpins` hat die RS232-Leitungen zugeordnet. Der SD-Weg laeuft, und
+die Karte mountet ueber sd_card.c (SDMMC mit SPI-Rueckfall) - **der
+automatische SPI-Rueckfall bleibt unberuehrt**, entfernt ist nur das
+gleichnamige Handkommando. Kein Konsolenbefehl kostet im Betrieb Laufzeit, aber
+441 Zeilen in `cmd_reg.c` waren zu pflegen, wenn sich an den Treibern etwas
+aendert. `cmd_version` zeigt den Flash-Takt weiterhin (dafuer bleibt
+`flash_clock_mhz`).
+
 **0.9.58** - Diagnosecode entfernt, der im Betrieb mitlief. Der Ton war bewiesen,
 die Messhilfen kosteten nur noch: ein Task schrieb alle 5 s die CPU-Last beider
 Kerne ins Log (auf Kern 1, dem Audio-Kern) und rechnete dafuer ueber alle
@@ -125,9 +138,8 @@ Ton und Bluetooth
 SD-Karte und System
   sd_mount           SD-Karte einbinden    sd_unmount   auswerfen
   sd_ls [pfad]       Verzeichnis auflisten
-  sdreg | sdpins | scanpins | sd_mount_spi    Diagnose (SD, Leitungen)
   eq ...             Equalizer hinter dem Mischer
-  version            Version und Takt
+  version            Version, Takt, Flash-Takt Soll/Ist
   free | tasks | log_level <tag|*> <stufe> | restart
 
 I2C-Bruecke zur Vampire (neu in 0.9.57)
