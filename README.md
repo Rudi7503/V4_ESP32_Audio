@@ -15,6 +15,17 @@ am Stueck, und der Aufbau des Datei-Zweigs verbraucht davon 9 216 Byte - der
 Wettlauf bleibt. **Kein verifizierter Stand.** Naechster Versuch: Arena auf
 rund 42 KB (32 KB Bedarf + ~9 KB Aufbau) oder der statische Bereich in .bss.
 
+**0.9.81** - **Weg 2: statischer Bereich in `.bss`.** Der MP3-Dekoder braucht
+rund 32 KB am Stueck, der Aufbau des Datei-Zweigs nimmt davon ~9 KB (gemessen
+0.9.80: 36 864 -> 27 648 Byte). Deshalb liegt die Arena jetzt als statisches
+Feld in `.bss` - per Definition zusammenhaengend und nicht zersplitterbar - und
+wird einmal beim Start als Heap-Bereich angemeldet
+(`heap_caps_add_region`, 42 KB). `heap_caps_remove_region` gibt es in dieser
+IDF-Version nicht, und es ist auch nicht noetig: multi_heap vergibt nach
+Best-Fit, kleine Anforderungen greifen den grossen Block nicht an. Nach dem
+Aufbau des Datei-Zweigs bleiben 33 KB - genug fuer den Dekoder.
+**Noch nicht auf Hardware verifiziert.**
+
 ## Stand
 
 **0.9.78** - **Option A: die letzten weichen Speicherposten.** Fuer den

@@ -16,6 +16,7 @@
 #include "nvs_flash.h"
 #include "esp_gmf_task.h"
 #include "esp_heap_caps.h"
+#include "esp_heap_caps_init.h"   /* heap_caps_add_region/remove_region */
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "i2s_input.h"
@@ -197,56 +198,67 @@ static void dump_pipeline(const char *what, esp_gmf_pipeline_handle_t pipe);
 static void dump_pipeline_state(const char *what, esp_gmf_pipeline_handle_t pipe);
 
 /*
- * Dekoder-Arena (0.9.77).
+ * Dekoder-Arena als statischer Bereich (Weg 2, 0.9.81).
  *
- * Der MP3-Dekoder holt sich beim Oeffnen rund 32 KB (gemessen: der freie Heap
- * faellt von 68436 auf 36704 Byte). Zu diesem Zeitpunkt ist der DRAM durch
- * BT-Stack, BT-Profile und die Bruecke bereits zersplittert - der groesste
- * zusammenhaengende Block war danach nur noch 640 Byte gross, und selbst der
- * BT-Stack scheiterte mit "calloc failed".
+ * Der MP3-Dekoder braucht rund 32 KB am Stueck; der Aufbau des Datei-Zweigs
+ * verbraucht davon noch ~9 KB (gemessen 0.9.80: 36864 -> 27648 Byte). Deshalb
+ * ein Bereich in .bss: der ist per Definition zusammenhaengend und kann gar
+ * nicht zersplittern.
  *
- * Deshalb wird der Block beim Start angefordert - solange der DRAM noch
- * zusammenhaengt - und unmittelbar vor dem Start der Wiedergabe wieder
- * freigegeben. Er liegt dann als eine grosse Luecke bereit, in die der Dekoder
- * passt, ohne den Rest zu zerreissen. Nach dem Stopp wird er erneut reserviert.
- * Verliert man ihn (kein zusammenhaengender Block mehr), laeuft alles weiter
- * wie vorher - nur ohne die Reserve.
+ * Er wird NICHT dauerhaft in den Heap gehaengt, sondern nur waehrend der
+ * Wiedergabe angemeldet (heap_caps_add_region) und danach wieder abgemeldet
+ * (heap_caps_remove_region). Damit ist er im Ruhezustand aus dem Heap heraus
+ * (die uebrigen Verbraucher haben die vollen ~40 KB wie bisher) und waehrend
+ * der Wiedergabe steht er dem Dekoder als frischer, grosser Block zur
+ * Verfuegung - vorher kann niemand hineinallokiert haben.
+ *
+ * ACHTUNG: Abmelden nur, wenn der Datei-Zweig wirklich geschlossen ist -
+ * heap_caps_remove_region darf keine lebenden Allokationen mehr enthalten.
  */
-#define LOCAL2BT_ARENA_BYTES  (36u * 1024u)
+#define LOCAL2BT_ARENA_BYTES  (42u * 1024u)
 
-static void *s_local2bt_arena;
+static uint8_t s_local2bt_arena[LOCAL2BT_ARENA_BYTES] __attribute__((aligned(16)));
+static int     s_local2bt_arena_offen;
 
+static size_t local2bt_groesster(void)
+{
+    return heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+}
+
+/*
+ * Bereich EINMALIG anmelden und angemeldet lassen (0.9.81).
+ *
+ * heap_caps_remove_region gibt es in dieser IDF-Version nicht. Das ist auch
+ * nicht noetig: multi_heap vergibt nach Best-Fit, kleine Anforderungen (BT,
+ * Bruecke) greifen den grossen Block also nicht an. Der Aufbau des
+ * Datei-Zweigs nimmt 9 KB davon, dem Dekoder bleiben 33 KB von 42 KB - genug
+ * fuer seine rund 32 KB, und der Bereich kann nicht weiter zersplittern.
+ */
 static void local2bt_arena_reserve(const char *wer)
 {
-    if (s_local2bt_arena != NULL) {
+    esp_err_t e;
+
+    if (s_local2bt_arena_offen != 0) {
         return;
     }
-    s_local2bt_arena = heap_caps_malloc(LOCAL2BT_ARENA_BYTES, MALLOC_CAP_DEFAULT);
-    ESP_LOGI(TAG, "Dekoder-Arena %s: %s (%u Byte)",
-             wer, (s_local2bt_arena != NULL) ? "reserviert" : "nicht verfuegbar",
-             (unsigned)LOCAL2BT_ARENA_BYTES);
+    e = heap_caps_add_region((intptr_t)&s_local2bt_arena[0],
+                             (intptr_t)&s_local2bt_arena[LOCAL2BT_ARENA_BYTES]);
+    if (e == ESP_OK) {
+        s_local2bt_arena_offen = 1;
+        ESP_LOGI(TAG, "Dekoder-Arena %s: %u Byte angemeldet, groesster Block %u Byte",
+                 wer, (unsigned)LOCAL2BT_ARENA_BYTES, (unsigned)local2bt_groesster());
+    } else {
+        ESP_LOGE(TAG, "Dekoder-Arena nicht anmeldbar: %d", (int)e);
+    }
 }
 
+/* Messpunkt vor dem Dekoderstart - der Bereich bleibt angemeldet. */
 static void local2bt_arena_release(void)
 {
-    size_t vorher, nachher;
-
-    if (s_local2bt_arena == NULL) {
-        return;
-    }
-    vorher = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-    heap_caps_free(s_local2bt_arena);
-    s_local2bt_arena = NULL;
-    nachher = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-    /*
-     * Messzeilen (0.9.79): Der Dekoder scheitert an seiner ersten Anforderung,
-     * obwohl die Arena unmittelbar davor freigegeben wird. Diese zwei Zahlen
-     * zeigen, ob die Freigabe ueberhaupt einen grossen Block erzeugt - und der
-     * Vergleich mit der naechsten Zeile (Dekoderstart) zeigt, wer ihn frisst.
-     */
-    ESP_LOGI(TAG, "Dekoder-Arena freigegeben: groesster Block %u -> %u Byte",
-             (unsigned)vorher, (unsigned)nachher);
+    ESP_LOGI(TAG, "Dekoder-Arena: groesster Block vor dem Dekoderstart %u Byte",
+             (unsigned)local2bt_groesster());
 }
+
 static void local2bt_request_stop(void)
 {
     local2bt_stop_requested = true;
