@@ -15,6 +15,18 @@ Konsole.
 
 ## Stand
 
+**0.9.61** - Zwei Korrekturen am Datei-Zweig, beide aus der Analyse in
+[`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md):
+(1) Ein Fehler im Datei-Zweig stoppt nicht mehr die ganze A2DP-Uebertragung -
+bisher riss ein gescheitertes `playfile` den I2S-Ton der Vampire mit und
+loeste zusaetzlich einen Task-Watchdog-Neustart aus. (2) Der Wandler fordert
+seinen Ausgangspuffer jetzt mit **einer festen Groesse** an (6144 Byte) statt
+je Block mit einer anderen; die Reallokation, die dabei mit NULL fehlschlug,
+kann damit nur noch einmal auftreten. Dazu laeuft vorerst eine Diagnosezeile
+im `open` des Wandlers (Ausrichtungen, Puffergroesse, freie Bytes je
+Heap-Bereich), die nach der Klaerung wieder entfernt wird.
+Noch **nicht** auf Hardware geprueft - dafuer muss geflasht werden.
+
 **0.9.60 auf Hardware verifiziert (08.10.2026)** - Per `usbipd` von WSL aus
 geflasht (ESP32-D0WD-V3, MAC `ec:c9:ff:fd:60:c0`) und am Board geprueft:
 SD-Karte mountet im **ersten** Versuch (`mounted at /sdcard (SDMMC 1 Bit)`,

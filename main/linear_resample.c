@@ -40,8 +40,10 @@
 #include "esp_gmf_element.h"
 #include "esp_gmf_err.h"
 #include "esp_gmf_info.h"
+#include "esp_gmf_node.h"
 #include "esp_gmf_oal_mem.h"
 #include "esp_gmf_port.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 /* Eigener Header: liefert aud_lin_resample_cfg_t und die oeffentlichen
@@ -79,6 +81,24 @@ static const char *TAG = "LIN_RESAMPLE";
 #define LIN_RESAMPLE_CHANNELS   2
 #define LIN_RESAMPLE_IN_BITS    32
 #define LIN_RESAMPLE_OUT_BITS   16
+
+/*
+ * Groesse, die der Wandler fuer seinen Ausgang anfordert (0.9.61).
+ *
+ * WARUM FEST: der Ausgangsport vergroessert seinen Puffer auf Anforderung
+ * (esp_gmf_payload_realloc_buffer_with_separate_alignment). Wurde - wie bis
+ * 0.9.60 - je Block eine andere Groesse verlangt, kam der Port beim ersten,
+ * kleinen Block (47 Frames -> 1024 Byte) in genau die Reallokation, die auf
+ * diesem Modul mit NULL fehlschlaegt (siehe docs/MP3_STARTFEHLER.md). Mit EINER
+ * festen, immer ausreichenden Groesse gibt es hoechstens einmal eine
+ * Vergroesserung, und danach nie wieder eine Anforderung.
+ *
+ * Rechnung: groesster Dekoderblock 1152 Frames, Verhaeltnis 48000/44100 = 1,088
+ * (der Wandler laeuft je nach Aushandlung mit 44,1 oder 48 kHz), 2 Kanaele,
+ * 16 Bit -> 1152 * 1,088 * 2 * 2 = 5016 Byte. Aufgerundet auf 1024 ergibt 5120;
+ * 6144 laesst Luft fuer Ratenverhaeltnisse bis 1,33.
+ */
+#define LIN_RESAMPLE_OUT_PAYLOAD_MAX 6144
 
 /*
  * Ein Sample lesen - je nach Eingangsformat.
@@ -279,6 +299,42 @@ static esp_gmf_job_err_t lin_resample_open(esp_gmf_element_handle_t self, void *
     }
     /* Ausgangsformat festschreiben, damit die Folgenglieder es kennen. */
     lin_resample_set_snd_info(self, res->out_rate, LIN_RESAMPLE_OUT_BITS, LIN_RESAMPLE_CHANNELS);
+    /*
+     * DIAGNOSE (temporaer in 0.9.61, kommt nach der Klaerung wieder raus):
+     * Der MP3-Startfehler laesst sich nur verstehen, wenn bekannt ist, welche
+     * Ausrichtung der Ausgangsport verlangt, wie sein Puffer aussieht und wie
+     * viel Speicher in welchem Bereich frei ist. Siehe docs/MP3_STARTFEHLER.md.
+     */
+    {
+        esp_gmf_port_t *out_port = (esp_gmf_port_t *)ESP_GMF_ELEMENT_GET(self)->out;
+        esp_gmf_port_t *next_in = NULL;
+        /* Die Elemente haengen als esp_gmf_node_t in der Kette - genauso greift
+         * auch esp_gmf_port.c darauf zu (esp_gmf_port.c:207). */
+        esp_gmf_node_t *node = (esp_gmf_node_t *)self;
+        if (node->next != NULL) {
+            esp_gmf_element_t *next_el = ESP_GMF_ELEMENT_GET(node->next);
+            if (next_el != NULL) {
+                next_in = (esp_gmf_port_t *)next_el->in;
+            }
+        }
+        ESP_LOGE(TAG, "DIAG port: out addr_align=%u size_align=%u payload=%p buf=%p len=%d needs_free=%d",
+                 out_port ? (unsigned)out_port->attr.buf_addr_aligned : 0,
+                 out_port ? (unsigned)out_port->attr.buf_size_aligned : 0,
+                 out_port ? (void *)out_port->payload : NULL,
+                 (out_port && out_port->payload) ? (void *)out_port->payload->buf : NULL,
+                 (out_port && out_port->payload) ? (int)out_port->payload->buf_length : -1,
+                 (out_port && out_port->payload) ? (int)out_port->payload->needs_free : -1);
+        ESP_LOGE(TAG, "DIAG next_in: addr_align=%u size_align=%u   spiram_cache_align=%u",
+                 next_in ? (unsigned)next_in->attr.buf_addr_aligned : 0,
+                 next_in ? (unsigned)next_in->attr.buf_size_aligned : 0,
+                 (unsigned)esp_gmf_oal_get_spiram_cache_align());
+        ESP_LOGE(TAG, "DIAG heap: internal frei=%u groesster=%u | dma frei=%u groesster=%u | default frei=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+    }
     ESP_LOGI(TAG, "Open: %u Hz, %d ch -> %u Hz, %d ch (Verhaeltnis Q16.16: %d)",
              (unsigned)(res->in_rate ? res->in_rate : res->out_rate), res->in_channels,
              (unsigned)res->out_rate, res->in_channels, (int)res->ratio_fixed);
@@ -382,6 +438,14 @@ static esp_gmf_job_err_t lin_resample_process(esp_gmf_element_handle_t self, voi
      * ersten grossen Block nur noch EINE Groesse.
      */
     max_out_bytes = ((max_out_bytes + 1023) / 1024) * 1024;
+    /*
+     * Immer mindestens LIN_RESAMPLE_OUT_PAYLOAD_MAX anfordern - siehe die
+     * Begruendung dort. Der berechnete Wert bleibt als Sicherung stehen, falls
+     * eine Quelle groessere Bloecke liefert als erwartet.
+     */
+    if (max_out_bytes < LIN_RESAMPLE_OUT_PAYLOAD_MAX) {
+        max_out_bytes = LIN_RESAMPLE_OUT_PAYLOAD_MAX;
+    }
     load_ret = esp_gmf_port_acquire_out(out_port, &out_load, max_out_bytes, ESP_GMF_MAX_DELAY);
     ESP_GMF_PORT_ACQUIRE_OUT_CHECK(TAG, load_ret, out_len, { goto __release; });
     out_samples = (int16_t *)out_load->buf;

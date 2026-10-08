@@ -5,6 +5,35 @@ kann seinen Ausgangspuffer nicht vergroessern, der Job bricht ab, die
 A2DP-Uebertragung stoppt. WAV-Dateien sind nicht betroffen. **Der Fehler ist
 nicht durch die I2C-Bruecke entstanden** (siehe A/B-Test unten).
 
+## Was in 0.9.61 eingebaut ist
+
+1. **Der Datei-Zweig reisst die Uebertragung nicht mehr mit** (`stream_proc.c`).
+   In der Fehlerbehandlung des Datei-Pipelines-Events wurde bisher zusaetzlich
+   `local2bt_request_media_stop()` gerufen - das stoppte die **ganze**
+   A2DP-Uebertragung, obwohl nur der Datei-Zubringer gescheitert war. Der
+   Mischer traegt aber weiter den I2S-Ton der Vampire. Der Aufruf, der Merker
+   `local2bt_media_stop_requested` und der zugehoerige Block in
+   `local2bt_process_stop_request()` sind entfernt; uebrig bleibt
+   `local2bt_request_stop()`, das nur den Datei-Zweig stoppt und zuruecksetzt
+   (raeumt auch den ERROR-Zustand auf). Ergebnis: ein fehlgeschlagenes
+   `playfile` kostet die Datei, nicht den Vampire-Ton - und es gibt keinen
+   Watchdog-Neustart mehr aus diesem Pfad.
+
+2. **Der Wandler fordert eine feste Puffergroesse an** (`linear_resample.c`).
+   Bisher wurde je Block eine andere Groesse verlangt (auf 1024 aufgerundet,
+   beim ersten kleinen Block also 1024 Byte) - genau dabei kam der Port in die
+   Reallokation, die fehlschlaegt. Jetzt wird immer
+   `LIN_RESAMPLE_OUT_PAYLOAD_MAX` (6144 Byte) angefordert, der berechnete Wert
+   bleibt als Sicherung nach oben. Damit gibt es hoechstens einmal eine
+   Vergroesserung und danach nie wieder eine Anforderung.
+
+3. **Temporaere Diagnose** im `open` des Wandlers: sie schreibt die
+   Ausrichtungsanforderungen beider Ports, den Zustand des Ausgangspuffers, den
+   Wert von `esp_gmf_oal_get_spiram_cache_align()` und die freien Bytes je
+   Heap-Bereich (`INTERNAL`, `DMA`, `DEFAULT`) ins Log. Sie beantwortet die noch
+   offene Frage aus dem Abschnitt "Was noch offen ist" und **wird nach der
+   Klaerung wieder entfernt**.
+
 ## Symptom (Mitschnitt /tmp/monitor_mp3c.log, 0.9.60)
 
 ```

@@ -161,7 +161,6 @@ static QueueHandle_t stream_proc_cmd_queue = NULL;
 
 /* Vom Event-Callback gesetzt, vom stream_proc_task abgearbeitet. */
 static volatile bool local2bt_stop_requested = false;
-static volatile bool local2bt_media_stop_requested = false;
 
 /*
  * Wunsch, den I2S-Eingang der Vampire nach Bluetooth zu schicken. Wird ueber
@@ -267,18 +266,18 @@ static void local2bt_lock_give(void)
     }
 }
 
-static void local2bt_request_media_stop(void)
-{
-    local2bt_media_stop_requested = true;
-}
+/*
+ * Hier stand bis 0.9.61 local2bt_request_media_stop(): es merkte vor, die
+ * gesamte A2DP-Uebertragung anzuhalten, und wurde ausschliesslich aus der
+ * Fehlerbehandlung des Datei-Zweigs gerufen. Das war falsch - der Mischer
+ * traegt weiter den I2S-Ton der Vampire, ein gescheitertes playfile darf den
+ * nicht mitreissen (docs/MP3_STARTFEHLER.md). Geblieben ist der Weg ueber
+ * local2bt_request_stop(), der nur den Datei-Zweig stoppt und zuruecksetzt.
+ * Die Uebertragung selbst beendet weiterhin das Konsolenkommando 'stop_media'.
+ */
 
 static void local2bt_process_stop_request(void)
 {
-    if (local2bt_media_stop_requested) {
-        local2bt_media_stop_requested = false;
-        ESP_LOGW(TAG, "A2DP-Uebertragung wird angehalten (ausserhalb des GMF-Tasks)");
-        esp_bt_audio_media_stop(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC);
-    }
     if (!local2bt_stop_requested) {
         return;
     }
@@ -1259,13 +1258,26 @@ static esp_gmf_err_t local2bt_pipe_event_cb(esp_gmf_event_pkt_t *pkt, void *ctx)
             ESP_LOGI(TAG, "A2DP Source finished - Wiedergabe wird beendet");
             local2bt_request_stop();
         } else if (pkt->sub == ESP_GMF_EVENT_STATE_ERROR) {
-            ESP_LOGE(TAG, "A2DP Source error");
-            local2bt_request_stop();
             /*
-             * Nur vormerken - siehe local2bt_request_media_stop(). Ein direkter
-             * Aufruf von hier (GMF-Task) hat den Watchdog-Neustart ausgeloest.
+             * Fehler im DATEI-Zweig (0.9.61).
+             *
+             * Hier wurde bisher zusaetzlich local2bt_request_media_stop()
+             * gerufen - das stoppte die ganze A2DP-Uebertragung, obwohl nur der
+             * Datei-Zubringer gescheitert war. Der Mischer traegt aber weiter
+             * den I2S-Ton der Vampire: ein fehlgeschlagenes playfile darf den
+             * nicht mitreissen. Am 08.10. war genau das zu sehen
+             * (docs/MP3_STARTFEHLER.md):
+             *
+             *   E ESP_GMF_PORT: ... reallocate payload buffer failed, el:aud_lin_resample_file
+             *   E STREAM_PROC: A2DP Source error
+             *   W STREAM_PROC: A2DP-Uebertragung wird angehalten   <- hier
+             *
+             * Der Datei-Zweig wird weiterhin gestoppt und zurueckgesetzt
+             * (local2bt_process_stop_request raeumt auch den ERROR-Zustand auf),
+             * der Stream laeuft weiter.
              */
-            local2bt_request_media_stop();
+            ESP_LOGE(TAG, "Fehler im Datei-Zweig - Wiedergabe wird beendet, Stream laeuft weiter");
+            local2bt_request_stop();
         }
     }
     return ESP_GMF_ERR_OK;
