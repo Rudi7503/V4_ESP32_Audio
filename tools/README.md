@@ -69,6 +69,20 @@ wie ein Firmware-Fehler aus, ist aber einer der Verkabelung. Zwei Stellen im
 Log verraten es: `0x107` **und** ein abweichender Bootmodus (`boot:0x13` statt
 `boot:0x1b`).
 
+## Hardware-Regel: die Vampire lebt nur mit gestecktem ESP32
+
+**Die V4 laeuft nur, wenn das ESP32-Modul im Sockel steckt** (Anwenderhinweis
+vom 08.10.2026: *"v4 laeuft nur wenn der esp32 im Board steckt, merke es dir"*).
+Daraus folgt fuer den Ablauf:
+
+* Waehrend des Umsteckens (Modul draussen) ist die **Vampire stromlos** - kein
+  ACP, kein `make upload`, kein `make log`, keine Messung gegen die V4.
+* Deshalb **nach** dem Umstecken und dem Stromzyklus arbeiten, nicht dazwischen.
+  Genau daran ist ein Upload gescheitert: `make upload` lief, waehrend das Modul
+  draussen war, und meldete nur `Failed to connect to host`.
+* Reihenfolge: Download-Modus -> flashen -> **umstecken + Stromzyklus** ->
+  erst jetzt V4-Upload, V4-Messung und `make log`.
+
 ## Flashen und Lesen unter Linux (WSL)
 
 Seit dem 08.10. haengt das Board per `usbipd-win` an WSL, damit unter Linux

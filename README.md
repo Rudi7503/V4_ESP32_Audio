@@ -22,6 +22,10 @@ fremdes oder altes Image zum Vergleich. Das Skript entschaerft CRLF in
 starten, dann ist die SD-Karte wieder da. Details in
 [`tools/README.md`](tools/README.md).
 
+**Die Vampire laeuft nur mit gestecktem ESP32-Modul.** Waehrend des Umsteckens
+ist sie stromlos - V4-Uploads (`make upload`), `make log` und Messungen gegen die
+V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
+
 ## Stand
 
 **0.9.73** - **Equalizer ueber I2C.** Neu im Vertrag: `EQ_INFO` (0x70),

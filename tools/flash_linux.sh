@@ -65,6 +65,9 @@ if grep -q 'Staying in bootloader' "$LOG"; then
     echo "  1. BOOT/GPIO2-Jumper entfernen (bzw. Modul zurueck in den Sockel)."
     echo "  2. Stromzyklus oder EN druecken."
     echo
+    echo "  Die Vampire laeuft NUR mit gestecktem ESP32-Modul. Solange es draussen"
+    echo "  ist: kein ACP, kein 'make upload', kein 'make log', keine V4-Messung."
+    echo
     echo " Erst danach ist die SD-Karte wieder da: solange GPIO2 (DAT0) auf LOW"
     echo " gehalten wird, scheitert sdmmc_init_ocr mit 0x107 und die Karte"
     echo " mountet nicht - und der Chip startet im falschen Bootmodus."
