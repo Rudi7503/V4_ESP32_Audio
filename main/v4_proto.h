@@ -255,6 +255,21 @@ typedef enum {
     /* --- SD -> Bluetooth playback ---------------------------------- */
     V4P_CMD_PLAY_FILE     = 0x60,   /* [path] or assembled -> -  (SD -> BT)    */
     V4P_CMD_STOP_PLAY     = 0x61,   /* -            -> -  (back to the I2S input)*/
+    /*
+     * A2DP-Uebertragung starten (0.9.65).
+     *
+     * Bis 0.9.64 liess sich die Uebertragung nur auf der Konsole des ESP32
+     * starten ('start_media'). Ueber I2C kam die Vampire damit bis zum
+     * Datei-Zweig, der aber keinen Abnehmer hatte:
+     *
+     *   I v4_link: SD playback started: /sdcard/test2.mp3
+     *   E STREAM_PROC: Wiedergabe beendet - stoppe den Datei-Zweig (ERROR)
+     *
+     * Antworten: OK (laeuft/laeuft jetzt), NO_DEVICE... siehe docs/I2C_BRUECKE.md.
+     * PLAY_FILE startet die Uebertragung ebenfalls, wenn sie noch nicht laeuft -
+     * dann funktionieren auch Master, die dieses Kommando nicht kennen.
+     */
+    V4P_CMD_MEDIA_START   = 0x62,   /* -            -> -  (start A2DP stream)  */
 
     V4P_CMD_RESET         = 0x7E,   /* -            -> -  (soft protocol reset)*/
 } v4p_cmd_t;

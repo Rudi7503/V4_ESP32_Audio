@@ -17,7 +17,7 @@ Konsolenprogramm eine Bedienung:
 | Bluetooth | `SCAN_START` 0x10, `SCAN_STOP` 0x11, `DEV_COUNT` 0x12, `DEV_GET` 0x13, `CONNECT` 0x20, `CONNECT_BDA` 0x21, `DISCONNECT` 0x22, `FORGET` 0x23 |
 | Karte | `SD_MOUNT` 0x30, `SD_INFO` 0x31, `SET_CHUNK` 0x32 |
 | Pfad/Dateien | `PATH_CLEAR` 0x38, `PATH_APPEND` 0x39, `DIR_OPEN` 0x40, `DIR_NEXT` 0x41, `DIR_CLOSE` 0x42, `FILE_OPEN` 0x50, `FILE_READ` 0x51, `FILE_CLOSE` 0x52 |
-| Wiedergabe | `PLAY_FILE` 0x60, `STOP_PLAY` 0x61, `RESET` 0x7E |
+| Wiedergabe | `PLAY_FILE` 0x60, `STOP_PLAY` 0x61, `MEDIA_START` 0x62, `RESET` 0x7E |
 
 ## 2. Die Luecken - Konsolenbefehl gegen Protokoll
 
@@ -31,7 +31,8 @@ Aufruf, den es schon gibt, wird nur im Dispatch von `v4_link.c` eingetragen.
 | `start_discovery` / `stop_discovery` | `SCAN_START` / `SCAN_STOP` | - | - |
 | `sd_mount` / `sd_ls` | `SD_MOUNT` / `DIR_*` | - | - |
 | `playfile <datei>` | `PLAY_FILE` | - | - |
-| **`start_media` / `stop_media`** | **fehlt** | klein: `esp_bt_audio_media_start/stop()` | neu: Funktion + Menue + Tests |
+| `start_media` | `MEDIA_START` 0x62 | erledigt (0.9.65) | erledigt (`v4_media_start()`, Konsole startet vor `PLAY_FILE`) |
+| **`stop_media`** | **fehlt** | klein: `esp_bt_audio_media_stop()` | offen - `STOP_PLAY` haelt nur die Datei an, die Uebertragung laeuft weiter (so gewollt: der Vampire-Ton bleibt) |
 | **`eq list/bands/set`** | **fehlt** | klein + **Lese-Rueckweg fehlt** (`stream_proc_eq_list` druckt nur) | neu, mit Nutzlast-Layout |
 | `i2s_media [off]` | fehlt | klein: `i2s2bt_request()` / `i2s2bt_stop()` | neu |
 | `mixer` (lesen/setzen) | fehlt | klein: `i2s2bt_set/get_mixer_wait()` | neu |

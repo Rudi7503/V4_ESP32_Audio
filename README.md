@@ -15,6 +15,21 @@ Konsole.
 
 ## Stand
 
+**0.9.65** - Die Vampire kann die A2DP-Uebertragung jetzt selbst starten.
+Der Feldtest am 08.10. (Mitschnitt `/tmp/v4_traffic.log`, 1024 Rahmen, 225
+`PLAY_FILE`) zeigte die Luecke: die Konsole der V4 spielte Dateien ab, aber es
+kam kein Ton, weil der Datei-Zweig ohne laufende Uebertragung keinen Abnehmer
+hat (`Wiedergabe beendet - stoppe den Datei-Zweig (ERROR)`). Neu:
+`MEDIA_START` (0x62), und `PLAY_FILE` startet die Uebertragung ebenfalls, wenn
+sie noch nicht laeuft - Master ohne dieses Kommando funktionieren damit
+unveraendert. Der Slave wartet beim Start selbst, bis der Mischer laeuft (bis
+2 s), und antwortet so lange BUSY. Ausserdem repariert: die Idempotenzpruefung
+in `PLAY_FILE` verglich den GMF-URI mit dem VFS-Pfad und griff deshalb nie -
+jede Wiederholung baute den Zweig neu auf. Die V4-Seite (`my_crossdev`,
+Projekt `I2C-test/v4_master`) hat `v4_media_start()`, startet sie in `do_play()`
+vor `PLAY_FILE` und kennt den Vertrag §11a (158 Tests, 0 Fehler).
+**Noch nicht auf Hardware geprueft.**
+
 **0.9.63 auf Hardware verifiziert (08.10.2026)** - **Die MP3 spielt wieder**,
 zusammen mit dem durchgehenden I2S-Ton der Vampire. Ursache und Beleg stehen in
 [`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md): dem Datei-Zweig fehlten im

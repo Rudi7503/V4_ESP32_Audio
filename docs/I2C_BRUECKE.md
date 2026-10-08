@@ -231,6 +231,7 @@ dort `fw=2`); die Mitschnitte liegen in
 | SD_MOUNT / SD_INFO | ja (`free=58702602 kB`) |
 | DIR_OPEN / DIR_NEXT bis 72 bzw. 53 Eintraege, mit Seiten | ja |
 | PLAY_FILE / STOP_PLAY (`audio_flags` 0x01 <-> 0x03) | ja |
+| MEDIA_START (0x62) | nein - auf Hardware noch nicht geschickt (0.9.65) |
 | Byte-Order-Selbsttest auf der V4 (Big Endian) | ja, Ergebnis 1 |
 | `i2c.library` 40.0, `SendI2C`/`ReceiveI2C` an 0xA0 | ja, `0x000000FF` = OK |
 | Logdatei der V4 (`Programs:test/v4_console.log`) | ja, Schreiben bestaetigt |

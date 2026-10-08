@@ -23,6 +23,8 @@
 #include "bt_manager.h"
 #include "sd_fs.h"
 #include "audio_source.h"
+#include "esp_bt_audio_media.h"
+#include "esp_bt_audio_defs.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
 
@@ -53,6 +55,7 @@ typedef enum {
     DEFER_DIR_LOAD,      /* read one directory entry into s_dir_cache      */
     DEFER_DIR_OPEN,      /* open a directory (I/O, so not in the hot path) */
     DEFER_FILE_OPEN,     /* open a file      (I/O, so not in the hot path) */
+    DEFER_MEDIA_START,   /* start the A2DP stream (0.9.65, needs waiting)  */
 } defer_op_t;
 
 /*
@@ -205,6 +208,9 @@ static uint16_t      s_defer_index;      /* DIR_NEXT index handoff         */
 static open_result_t s_open_res;         /* deferred DIR_OPEN / FILE_OPEN  */
 static bool          s_play_pending;     /* a PLAY_FILE rebuild is queued  */
 static char          s_play_pending_path[SD_FS_PATH_BUF];
+/* Ergebnis der letzten MEDIA_START-Anforderung; BUSY heisst "noch keins". */
+static v4p_status_t  s_media_err = V4P_ST_BUSY;
+static bool          s_media_pending;   /* Start laeuft im Arbeitstask */
 static QueueHandle_t s_work_queue;
 
 /* ------------------------------------------------------------------ */
@@ -283,6 +289,76 @@ static void fill_info_payload(uint8_t *out)
     out[9] = V4P_PATH_MAX;
     out[10] = 0;
     out[11] = 0;
+}
+
+/*
+ * Pfadvergleich fuer "spielt schon derselbe Titel?" (0.9.65).
+ *
+ * audio_source_current_path() liefert den GMF-URI ("file://sdcard/test2.mp3"),
+ * die Protokollpfade sind VFS-Pfade ("/sdcard/test2.mp3"). Der frueher direkte
+ * strcmp() konnte deshalb NIE gleich sein: die Idempotenzpruefung in PLAY_FILE
+ * war toter Code, und jede Wiederholung baute den Zweig neu auf. Im V4-Test am
+ * 08.10. waren das 225 PLAY_FILE in vier Minuten - der Ton riss dabei ab,
+ * obwohl der Master nur den BUSY-Zyklus bestaetigt hat.
+ */
+static bool same_media_path(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+    if (strncmp(a, "file://", 7) == 0) {
+        a += 7;
+    }
+    if (strncmp(b, "file://", 7) == 0) {
+        b += 7;
+    }
+    while (*a == '/') {
+        a++;
+    }
+    while (*b == '/') {
+        b++;
+    }
+    return strcmp(a, b) == 0;
+}
+
+/*
+ * A2DP-Uebertragung starten und warten, bis der Mischer laeuft (0.9.65).
+ *
+ * Laeuft NUR im Arbeitstask (verzoegert), nie im Antworte-Pfad - das Warten
+ * sprengte dort den t_wait des Masters. Nach dem Start braucht die Kette rund
+ * 400-500 ms ("Starte I2S-Zubringer, dann nach 400 ms den Mischer"), und erst
+ * danach hat der Datei-Zweig einen Abnehmer. Ohne dieses Warten endete
+ * PLAY_FILE im Fehler (ERROR statt FINISHED, Mitschnitt /tmp/v4_traffic.log).
+ */
+#define MEDIA_START_WAIT_MS     2000
+#define MEDIA_START_POLL_MS       50
+
+static v4p_status_t media_start_wait(void)
+{
+    if (bt_mgr_audio_streaming()) {
+        return V4P_ST_OK;
+    }
+    if (!bt_mgr_is_connected()) {
+        /* Ohne verbundenes Geraet registriert der BT-Stack die Uebertragung
+         * nicht ("a2d_media_start is not registered"). */
+        return V4P_ST_BAD_STATE;
+    }
+
+    esp_err_t err = esp_bt_audio_media_start(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Uebertragung abgelehnt: %s", esp_err_to_name(err));
+        return V4P_ST_BT_ERR;
+    }
+
+    for (int waited = 0; waited < MEDIA_START_WAIT_MS; waited += MEDIA_START_POLL_MS) {
+        if (bt_mgr_audio_streaming()) {
+            ESP_LOGI(TAG, "A2DP-Uebertragung laeuft (nach %d ms)", waited);
+            return V4P_ST_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(MEDIA_START_POLL_MS));
+    }
+    ESP_LOGW(TAG, "A2DP-Uebertragung nach %d ms nicht gestartet", MEDIA_START_WAIT_MS);
+    return V4P_ST_BT_ERR;
 }
 
 /* ------------------------------------------------------------------ */
@@ -397,7 +473,16 @@ static void run_deferred(const work_msg_t *w)
             st = (e == SD_FS_ERR_NOT_FOUND) ? V4P_ST_NOT_FOUND : map_sd_err(e);
         } else {
             sd_fs_file_close(h);
-            if (audio_source_play_sd(w->path) != ESP_OK) {
+            /*
+             * 0.9.65: Die Uebertragung muss laufen, sonst hat der Datei-Zweig
+             * keinen Abnehmer (Mitschnitt /tmp/v4_traffic.log: "Wiedergabe
+             * beendet - stoppe den Datei-Zweig (ERROR)"). Master, die
+             * MEDIA_START nicht kennen, funktionieren damit unveraendert.
+             */
+            v4p_status_t mst = media_start_wait();
+            if (mst != V4P_ST_OK) {
+                st = mst;
+            } else if (audio_source_play_sd(w->path) != ESP_OK) {
                 st = V4P_ST_IO_ERR;
             }
         }
@@ -413,6 +498,11 @@ static void run_deferred(const work_msg_t *w)
             ESP_LOGW(TAG, "SD playback of %s failed (status 0x%02X)",
                      w->path, (unsigned)st);
         }
+        break;
+    }
+    case DEFER_MEDIA_START: {
+        s_media_err = media_start_wait();
+        s_media_pending = false;
         break;
     }
     case DEFER_SD_STOP:
@@ -874,7 +964,7 @@ static void dispatch(uint8_t cmd, uint8_t seq, const uint8_t *p, uint8_t plen,
          * effect and this repeat is the confirmation the master is waiting for. */
         if (audio_source_get() == AUDIO_SOURCE_SD) {
             const char *cur = audio_source_current_path();
-            if (cur != NULL && strcmp(cur, full) == 0) {
+            if (same_media_path(cur, full)) {   /* URI gegen VFS-Pfad, siehe oben */
                 status = V4P_ST_OK;
                 break;
             }
@@ -921,6 +1011,29 @@ static void dispatch(uint8_t cmd, uint8_t seq, const uint8_t *p, uint8_t plen,
         status = V4P_ST_BUSY;
         *defer = DEFER_SD_STOP;
         break;
+
+    case V4P_CMD_MEDIA_START: {
+        if (bt_mgr_audio_streaming()) {
+            s_media_err = V4P_ST_OK;
+            status = V4P_ST_OK;               /* laeuft bereits */
+            break;
+        }
+        if (s_media_pending) {
+            status = V4P_ST_BUSY;             /* der erste Versuch laeuft noch */
+            break;
+        }
+        if (s_media_err != V4P_ST_BUSY) {
+            /* Ergebnis der letzten Anforderung einmal melden, danach wieder
+             * einen frischen Versuch zulassen. */
+            status = s_media_err;
+            s_media_err = V4P_ST_BUSY;
+            break;
+        }
+        s_media_pending = true;
+        *defer = DEFER_MEDIA_START;
+        status = V4P_ST_BUSY;
+        break;
+    }
 
     case V4P_CMD_RESET:
         s_path_len = 0;
