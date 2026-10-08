@@ -163,14 +163,31 @@ in beiden Faellen 128 Byte - die Kommentare sind der Rest von Version 2.
 
 ## 6. Status: was geprueft ist - und was nicht
 
-**Geprueft (in dieser Umgebung moeglich):**
+**Geprueft:**
 
-* `v4_proto.c` uebersetzt mit dem Host-Compiler fehlerfrei
-  (`gcc -std=c11 -Wall -Wextra -Wpedantic`).
+* **Der ganze Firmwarestand uebersetzt fehlerfrei mit ESP-IDF v6.1 unter Linux**
+  (`idf.py -DIDF_TARGET=esp32 build`, Zielvariante ohne PSRAM, Flash 40 MHz):
+  `Project build complete`, `bt_audio.bin` 2 157 788 Byte, 31 % der App-Partition
+  frei. Die Zahlen stammen aus
+  `idf.py size`: IRAM 106 391 von 131 072 Byte (81 %), DRAM 57 987 von
+  124 580 Byte (47 %) - **66 KB DRAM frei**, die Bruecke passt also auch auf das
+  Modul ohne PSRAM.
+* **Keine Warnung in den neuen Dateien** (`v4_proto.c`, `v4_link.c`,
+  `bt_manager.c`, `sd_fs.c`, `audio_source.c`) und keine in `main.c`,
+  `cmd_reg.c`, `sd_card.c`, `stream_proc.h`. Die sieben Warnungen, die der Build
+  meldet, stehen alle in `stream_proc.c` und betreffen ausschliesslich Symbole der
+  stillgelegten codec2bt/bt2codec-Kette (`codec2bt_task`, `bt2codec_task`,
+  `*_asrc_weight`, `*_pipe_event_cb`, `stream_proc_deinit_clk_sync_monitor`) -
+  keines davon kommt in der Aenderung vor.
+* `v4_proto.c` uebersetzt auch mit dem Host-Compiler mit
+  `gcc -std=c11 -Wall -Wextra -Wpedantic` warnungsfrei.
 * Alle von `v4_link.c` benutzten Makros (`V4P_*`, `SD_FS_*`, `BT_MGR_*`,
   `AUDIO_SOURCE_*`) und alle 35 Aufrufe in die drei Schichten sind deklariert
   bzw. definiert - per Skript gegen die Header geprueft.
-* Die Vertragswerte gegen die V4-Seite abgeglichen (§4).
+* Die Vertragswerte gegen die V4-Seite abgeglichen (§4). Die
+  `dependencies.lock` beider Ablagen ist inhaltlich identisch, gebaut wird also
+  gegen `esp_bt_audio 1.1.0~1` - dieselbe Fassung, gegen deren Header der Port
+  geschrieben wurde.
 * Die I2C-Slave-API in ESP-IDF 6.1 passt zum Code: `i2c_slave_config_t`-Felder
   und die Signatur von `i2c_slave_received_callback_t` stimmen Feld fuer Feld
   bzw. Zeichen fuer Zeichen. Der Slave-Treiber v2 ist in 6.1 der **einzige**;
@@ -180,13 +197,13 @@ in beiden Faellen 128 Byte - die Kommentare sind der Rest von Version 2.
 
 **NICHT geprueft:**
 
-* **Nie mit ESP-IDF uebersetzt** - in dieser Umgebung gibt es keine
-  ESP-IDF-Werkzeugkette und kein angeschlossenes Board (siehe auch
-  `docs/ARBEITSWEISE.md`: gebaut wird unter Windows mit `tools/mess_bauen.ps1`).
-  Der erste Build passiert auf der Windows-Seite.
 * **Nie geflasht, nie auf Hardware gelaufen.** Kein I2C-Verkehr mit einer echten
   Vampire, kein A2DP-Test, kein SD-Test.
 * `v4_selftest` ist noch nie ausgefuehrt worden.
+* Der Linux-Build ist **nicht** byte-identisch mit dem Windows-Image: in der
+  Windows-`sdkconfig` stehen Menue-Einstellungen, die nicht in
+  `sdkconfig.defaults*` liegen. Fuer den Nachweis "uebersetzt" reicht es, fuer
+  einen Vergleich der Images nicht.
 
 ---
 
@@ -233,18 +250,16 @@ in beiden Faellen 128 Byte - die Kommentare sind der Rest von Version 2.
 
 ## 8. Offene Punkte
 
-* **Ungeprueft** (siehe §6) - das ist der wichtigste Punkt: der Stand ist ein
-  sauber geschriebener, statisch gepruefter Port, kein auf Hardware bewiesener.
-* Nach dem ersten Build ist mit Uebersetzungsfehlern zu rechnen; die
-  Wahrscheinlichkeit ist durch die Pruefungen oben verkleinert, nicht
-  ausgeschlossen.
+* **Nie auf Hardware gelaufen** (siehe §6) - das ist der wichtigste Punkt. Der
+  Port uebersetzt warnungsfrei, aber kein I2C-Rahmen hat je eine echte Vampire
+  erreicht und kein Befehl wurde am Board ausgefuehrt.
 * **Speicher:** die Bruecke kostet rund 20 KB - zwei Aufgaben mit je 6144 Byte
   Stack, ein 2 KB grosser I2C-Senderringpuffer (`V4_TX_BUF_DEPTH`), je 1 KB
-  Rahmenpuffer und Blockcache, dazu die Geraetetabelle (16 × ~255 Byte). Auf dem
-  Modul ohne PSRAM (WROOM) ist das spuerbar; falls `free` nach dem Start einen
-  kleinen groessten Block zeigt, sind `V4_TX_BUF_DEPTH` und `V4_TASK_STACK` die
-  ersten Schrauben. Die Puffer haengen an `V4P_BULK_PAYLOAD_MAX` (1024) bzw.
-  `SET_CHUNK` - ein kleineres `chunk` spart direkt Speicher.
+  Rahmenpuffer und Blockcache, dazu die Geraetetabelle (16 × ~255 Byte). Im
+  no-PSRAM-Build bleiben davon 66 KB DRAM frei (gemessen, §6), es ist also Luft.
+  Wird es spaeter eng, sind `V4_TX_BUF_DEPTH` und `V4_TASK_STACK` die ersten
+  Schrauben; die Puffer haengen an `V4P_BULK_PAYLOAD_MAX` (1024) bzw.
+  `SET_CHUNK`, ein kleineres `chunk` spart direkt Speicher.
 * `GET_STATUS.sd_free_kb` und `SD_INFO` liefern den Stand vom **Mount**; die
   Kapazitaet wird nur dort aufgefrischt, weil `esp_vfs_fat_info()` ueber
   `f_getfree()` laeuft und im Antwortpfad zu lange brauchte. Nach Aenderungen

@@ -16,11 +16,11 @@ Konsole.
 ## Stand
 
 **0.9.57** - I2C-Bruecke zur Vampire V4 eingebaut (Protokoll v3, Slave 0x50 auf
-SDA=GPIO18/SCL=GPIO23). Der Code ist aus dem erprobten Vorgaengerprojekt
-uebernommen und statisch geprueft, aber **noch nicht mit ESP-IDF uebersetzt und
-noch nie auf Hardware gelaufen** - siehe
-[`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md) fuer den genauen Pruefstand, die
-Unterschiede zum Vorgaenger und die Inbetriebnahme.
+SDA=GPIO18/SCL=GPIO23). Der Stand **uebersetzt fehlerfrei mit ESP-IDF v6.1**
+(Zielvariante ohne PSRAM: 31 % der App-Partition frei, 66 KB DRAM frei, keine
+Warnung in den neuen Dateien) - aber er ist **noch nie geflasht und nie auf
+Hardware gelaufen**. Siehe [`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md) fuer den
+genauen Pruefstand, die Unterschiede zum Vorgaenger und die Inbetriebnahme.
 
 **0.9.39 bis 0.9.56** - MP3 und WAV klingen sauber, auch im schnellen Wechsel
 (acht Titel im 6-Sekunden-Takt), die Vampire ist durchgehend zu hoeren.
@@ -79,6 +79,20 @@ Messfaelle (`-Mode`): 0 = nur Datei-Zweig, 1 = I2S mit GMF-Wandlern,
 2 = I2S mit eigenem linearem Wandler (**Vorgabe**), 3 = GMF-Bitwandler vor der
 GMF-Ratenwandlung, 4 = gesperrt (Absturz in `aud_rate_cvt_i2s`).
 
+**Zweiter Weg: Uebersetzen unter Linux (nur Bauen, nicht Flashen).** Seit 0.9.57
+gibt es daneben eine Linux-Umgebung, in der der ganze Stand ohne Windows
+uebersetzt werden kann - damit sind Uebersetzungsfehler pruefbar, ohne das Board
+anzufassen:
+
+```bash
+. ~/esp-idf/export.sh                 # ESP-IDF v6.1 + Werkzeuge in ~/.espressif
+idf.py -DIDF_TARGET=esp32 build
+```
+
+Der `build/`-Ordner und die Komponenten liegen beide im Projekt und sind
+gitignoriert. Geflasht wird weiter unter Windows (`tools/flash_only.ps1`) - in
+WSL gibt es keinen seriellen Port.
+
 ## Konsolenbefehle
 
 Die Liste ist aus der Registrierung in [`main/cmd_reg.c`](main/cmd_reg.c)
@@ -112,9 +126,9 @@ I2C-Bruecke zur Vampire (neu in 0.9.57)
 
 ## Offene Punkte
 
-* **Die I2C-Bruecke ist ungeprueft**: nie mit ESP-IDF uebersetzt, nie geflasht,
-  nie mit einer Vampire gesprochen. Erster Schritt nach dem Flashen sind
-  `v4_bus` und `v4_selftest` - siehe
+* **Die I2C-Bruecke ist noch nie auf Hardware gelaufen**: sie uebersetzt
+  warnungsfrei, aber nie geflasht und nie mit einer Vampire gesprochen. Erster
+  Schritt nach dem Flashen sind `v4_bus` und `v4_selftest` - siehe
   [`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md), Abschnitt 7.
 * Diagnosezeilen (`Block n: in_frames=...`, Durchsatz, 2-ms-Raster) sind noch
   aktiv; sie kosten UART-Zeit im Audio-Task und sollten fuer den Dauerbetrieb
