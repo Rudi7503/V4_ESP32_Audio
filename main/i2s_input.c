@@ -209,26 +209,19 @@ esp_err_t i2s_input_create(esp_gmf_io_handle_t *io)
      * dreifach ueberdimensioniert.
      */
     io_cfg.io_cfg.buffer_cfg.buffer_size = 6 * 1024;
-    /*
-     * Eingebauter Durchsatz-Monitor: er zaehlt die gelesenen Bytes. Damit sehen
-     * wir ohne Zusatzcode, ob ueberhaupt Daten ankommen - und ob die Menge zur
-     * erwarteten Datenrate passt.
-     *
-     * Erwartung bei 60 kHz, 32 Bit, stereo:
-     *     60000 * 4 Byte * 2 Kanaele = 480000 Byte/s = 3840 kbit/s
-     */
-    io_cfg.io_cfg.enable_speed_monitor = true;
 
     /*
-     * Kein Durchsatz-Monitor mehr.
+     * Kein Durchsatz-Monitor (0.9.58).
      *
-     * Der eingebaute Geschwindigkeitszaehler wird im Datenbus-Pfad des IOs
-     * aktualisiert, und die Pipeline arbeitet mit einer KLON des Pool-IO. Ein
-     * Monitor, der am Pool-Exemplar liest, sieht deshalb immer 0 - und hat mit
-     * seinem Sekundentakt samt Warnzeile nur UART-Zeit und CPU gefressen, was
-     * sich als abgehackter Ton bemerkbar macht. Der Ton selbst ist der beste
-     * Messwert.
+     * Der Zaehler wurde frueher gelesen, um zu sehen, ob ueberhaupt Daten
+     * ankommen (Sollwert 60 kHz x 4 Byte x 2 = 480000 Byte/s). Diese Auswertung
+     * ist entfernt - der eingebaute Geschwindigkeitszaehler wird im
+     * Datenbus-Pfad des IOs bei JEDEM Block aktualisiert, und die Pipeline
+     * arbeitet mit einer KLON des Pool-IO, weshalb ein Monitor am Pool-Exemplar
+     * ohnehin immer 0 sah. Damit zaehlte er nur mit und kostete im Tonpfad.
+     * Der Ton selbst ist der beste Messwert.
      */
+    io_cfg.io_cfg.enable_speed_monitor = false;
 
     esp_gmf_err_t gmf_err = esp_gmf_io_i2s_pdm_init(&io_cfg, io);
     if (gmf_err != ESP_GMF_ERR_OK || *io == NULL) {
@@ -239,9 +232,4 @@ esp_err_t i2s_input_create(esp_gmf_io_handle_t *io)
 
     ESP_LOGI(TAG, "I2S input ready");
     return ESP_OK;
-}
-
-void i2s_input_start_monitor(void)
-{
-    /* Bewusst leer - siehe die Erklaerung in i2s_input_create(). */
 }

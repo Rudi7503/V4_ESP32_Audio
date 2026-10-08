@@ -15,6 +15,17 @@ Konsole.
 
 ## Stand
 
+**0.9.58** - Diagnosecode entfernt, der im Betrieb mitlief. Der Ton war bewiesen,
+die Messhilfen kosteten nur noch: ein Task schrieb alle 5 s die CPU-Last beider
+Kerne ins Log (auf Kern 1, dem Audio-Kern) und rechnete dafuer ueber alle
+Tasklisten - dieselben Zahlen liefert das Kommando `tasks` auf Abruf. Ausserdem
+entfernt: der tote Durchsatz-Helfer `i2s2bt_log_io_speed` (ohne Aufrufer seit
+0.9.41), der leere Stub `i2s_input_start_monitor()`, der Byte-Zaehler im
+I2S-Eingang (`enable_speed_monitor`, ohne Auswertung) und zwei Kommentare, die
+entfernte Tasks beschrieben. Die Ketten-Diagnose (`dump_pipeline`,
+`dump_pipeline_state`) bleibt, schreibt aber auf **Debug-Stufe** - mit
+`log_level STREAM_PROC debug` wieder sichtbar.
+
 **0.9.57** - I2C-Bruecke zur Vampire V4 eingebaut (Protokoll v3, Slave 0x50 auf
 SDA=GPIO18/SCL=GPIO23). Der Stand **uebersetzt fehlerfrei mit ESP-IDF v6.1**
 (Zielvariante ohne PSRAM: 31 % der App-Partition frei, 66 KB DRAM frei, keine
@@ -130,9 +141,10 @@ I2C-Bruecke zur Vampire (neu in 0.9.57)
   warnungsfrei, aber nie geflasht und nie mit einer Vampire gesprochen. Erster
   Schritt nach dem Flashen sind `v4_bus` und `v4_selftest` - siehe
   [`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md), Abschnitt 7.
-* Diagnosezeilen (`Block n: in_frames=...`, Durchsatz, 2-ms-Raster) sind noch
-  aktiv; sie kosten UART-Zeit im Audio-Task und sollten fuer den Dauerbetrieb
-  abschaltbar sein.
+* Diagnoseausgaben der Kette (`dump_pipeline`, `dump_pipeline_state`) stehen auf
+  Debug-Stufe und sind im Normalbetrieb still. Wer sie sehen will:
+  `log_level STREAM_PROC debug`. Die frueheren periodischen Zeilen (CPU-Last,
+  Durchsatz, Puffer im Sekundentakt) sind in 0.9.41 und 0.9.58 entfernt worden.
 * Nach `start_media` kann das erste `playfile` einmal mit "Got NULL Pointer" im
   Resampler-Ausgangsport scheitern; der Datei-Zweig sollte erst starten, wenn
   die Mischer-Pipeline `RUNNING` meldet.

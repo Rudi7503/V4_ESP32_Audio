@@ -388,7 +388,6 @@ void app_main(void)
 
     ESP_ERROR_CHECK(esp_gmf_pool_init(&pool));
     ESP_ERROR_CHECK(pool_reg(pool));        /* Elemente und IO-Typen anmelden */
-    i2s_input_start_monitor();              /* Durchsatz des I2S-Eingangs loggen */
     stream_proc_init(pool);                 /* Pipelines aufbauen */
 
     /* Classic Bluetooth, nur BR/EDR (kein BLE). */

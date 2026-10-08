@@ -37,15 +37,6 @@ extern "C" {
  */
 esp_err_t i2s_input_create(esp_gmf_io_handle_t *io);
 
-/**
- * @brief  Start a task that logs the I2S throughput once per second
- *
- * Expected value at 60 kHz / 32 bit / stereo is 480000 bytes per second. A
- * reading of zero means the Vampire is not sending (or the wiring/pins are
- * wrong), which is the first thing to check.
- */
-void i2s_input_start_monitor(void);
-
 #ifdef __cplusplus
 }
 #endif  /* __cplusplus */

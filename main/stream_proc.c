@@ -1739,7 +1739,7 @@ static void dump_pipeline(const char *what, esp_gmf_pipeline_handle_t pipe)
     esp_gmf_element_handle_t el = NULL;
     int idx = 0;
     while (esp_gmf_pipeline_iterate_element(pipe, &it, &el) == ESP_GMF_ERR_OK && el != NULL) {
-        ESP_LOGI(TAG, "%s[%d] %s: in=%d, out=%d", what, idx, OBJ_GET_TAG(el),
+        ESP_LOGD(TAG, "%s[%d] %s: in=%d, out=%d", what, idx, OBJ_GET_TAG(el),
                  port_count(ESP_GMF_ELEMENT_GET(el)->in), port_count(ESP_GMF_ELEMENT_GET(el)->out));
         idx++;
     }
@@ -2141,43 +2141,11 @@ bool i2s2bt_is_ready(void)
 }
 
 /*
- * Durchsatz des I2S-Eingangs auslesen.
- *
- * WOZU: im Mischbetrieb stockte der Vampire-Zweig kurz (Puffer 90% -> 22% ->
- * 90%, Minimum 4708 Byte), hoerbar als Ruckler und - weil der Mischer bei
- * Timeout mit Nullen auffuellt (esp_gmf_mixer.c:211-218) - als Verzerrung in
- * den tiefen Frequenzen.
- *
- * Die Frage ist, WER die Luecke erzeugt: liefert die Vampire unregelmaessig,
- * oder verliert unsere Kette Daten? Der I2S-Eingang fuehrt dafür eine
- * Durchsatz-Statistik (enable_speed_monitor), die GMF aber NICHT selbst loggt -
- * sie wird hier auf Anfrage gelesen.
- *
- * Erwartung bei 60 kHz, 32 Bit, stereo:
- *     60000 * 4 Byte * 2 = 480000 Byte/s = 3840 kbit/s
- * Ein Einbruch von "aktuell" gegenueber "Mittel" zeigt die Luecke direkt.
+ * Hier stand bis 0.9.58 i2s2bt_log_io_speed(): es las auf Anfrage die
+ * Durchsatz-Statistik des I2S-Eingangs. Die Funktion hatte keinen Aufrufer mehr
+ * (das zugehoerige Konsolenkommando war schon in 0.9.40/0.9.41 entfernt worden),
+ * war also toter Code. Der Ton selbst ist der Messwert.
  */
-void i2s2bt_log_io_speed(void)
-{
-    if (i2s2bt_pipe == NULL) {
-        ESP_LOGW(TAG, "I2S-Zweig ist nicht angelegt");
-        return;
-    }
-    esp_gmf_io_handle_t in_io = ESP_GMF_PIPELINE_GET_IN_INSTANCE(i2s2bt_pipe);
-    if (in_io == NULL) {
-        ESP_LOGW(TAG, "I2S-Zweig hat keinen Eingang");
-        return;
-    }
-    esp_gmf_io_speed_stats_t st = {0};
-    if (esp_gmf_io_get_speed_stats(in_io, &st) != ESP_GMF_ERR_OK) {
-        ESP_LOGW(TAG, "Durchsatz-Statistik nicht lesbar (Monitor aus?)");
-        return;
-    }
-    ESP_LOGI(TAG, "I2S-Eingang: gesamt %llu Byte in %llu ms | Mittel %u kbit/s | aktuell %u kbit/s",
-             (unsigned long long)st.total_bytes, (unsigned long long)st.total_time_ms,
-             (unsigned)st.average_speed_kbps, (unsigned)st.current_speed_kbps);
-    ESP_LOGI(TAG, "   Sollwert 3840 kbit/s (60 kHz, 32 Bit, stereo)");
-}
 
 void i2s2bt_set_mixer_wait(int prefill_ms, int transit_ms)
 {
@@ -2482,117 +2450,26 @@ static void local2bt_eof_task(void *arg)
 }
 
 /*
- * CPU-Last beider Kerne ins Log.
+ * Hier stand bis 0.9.58 ein Task, der alle 5 s die CPU-Last beider Kerne ins Log
+ * schrieb - gerechnet aus der FreeRTOS-Laufzeitstatistik (IDLE-Zeit je Kern) und
+ * uxTaskGetSystemState().
  *
- * Grund: beim Mischen (Vampire 60 kHz + MP3) klang der Ton abgehackt. Verdacht
- * war Ueberlastung. Ohne Messung ist das nicht zu trennen: der I2S-Zweig hat
- * eine Ratenwandlung mit complexity = 1, der Mischer hat ebenfalls eine, und
- * alle drei Pipelines laufen auf Kern 1.
- *
- * Gerechnet wird ueber die FreeRTOS-Laufzeitstatistik: die IDLE-Tasks
- * verbringen ihre ganze Zeit in der Idle-Schleife. Last = 1 - (Idle-Zeit /
- * Gesamtzeit) je Kern. Damit ist die Last des Kerns gemeint, nicht die eines
- * einzelnen Tasks.
- *
- * Voraussetzungen (beide gesetzt in sdkconfig.defaults):
- *   CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
- *   CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+ * Entfernt, weil er im Betrieb nichts beitraegt:
+ *   - dieselben Zahlen liefert das Konsolenkommando "tasks" auf Abruf
+ *     (esp_gmf_oal_sys_get_real_time_stats()),
+ *   - der Task lief auf Kern 1, also auf demselben Kern wie der Mischer, und
+ *     weckte dort alle 5 s die Auswertung ueber ALLE Tasklisten.
+ * Die beiden FreeRTOS-Optionen in sdkconfig.defaults bleiben: das
+ * "tasks"-Kommando braucht sie.
  */
-#define CPU_LOG_INTERVAL_MS 5000
-
-static void cpu_load_task(void *arg)
-{
-    (void)arg;
-    uint64_t prev[2] = {0};
-    uint64_t prev_total[2] = {0};
-    bool have_prev = false;
-
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(CPU_LOG_INTERVAL_MS));
-
-        uint64_t idle[2] = {0};
-        uint64_t total[2] = {0};
-        TaskStatus_t *tasks = NULL;
-        UBaseType_t num = 0;
-
-        UBaseType_t list_size = uxTaskGetNumberOfTasks() + 8;
-        tasks = heap_caps_malloc(list_size * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM);
-        if (tasks == NULL) {
-            tasks = malloc(list_size * sizeof(TaskStatus_t));
-        }
-        if (tasks == NULL) {
-            continue;
-        }
-
-        uint32_t total_runtime = 0;
-        num = uxTaskGetSystemState(tasks, list_size, &total_runtime);
-        for (UBaseType_t i = 0; i < num; i++) {
-            int core = tasks[i].xCoreID;
-            if (core != 0 && core != 1) {
-                continue;   /* tskNO_AFFINITY o.ae. */
-            }
-            total[core] += tasks[i].ulRunTimeCounter;
-            const char *name = tasks[i].pcTaskName;
-            if (name != NULL && strncmp(name, "IDLE", 4) == 0) {
-                idle[core] += tasks[i].ulRunTimeCounter;
-            }
-        }
-        free(tasks);
-
-        int load0 = 0;
-        int load1 = 0;
-        if (have_prev) {
-            uint64_t d_total0 = total[0] - prev_total[0];
-            uint64_t d_total1 = total[1] - prev_total[1];
-            uint64_t d_idle0 = idle[0] - prev[0];
-            uint64_t d_idle1 = idle[1] - prev[1];
-            if (d_total0 > 0) {
-                load0 = (int)(100 - (d_idle0 * 100 / d_total0));
-            }
-            if (d_total1 > 0) {
-                load1 = (int)(100 - (d_idle1 * 100 / d_total1));
-            }
-        }
-        ESP_LOGI(TAG, "CPU-Last: Kern0 %d%%, Kern1 %d%%  (%d Tasks)", load0, load1, (int)num);
-        prev[0] = idle[0];
-        prev[1] = idle[1];
-        prev_total[0] = total[0];
-        prev_total[1] = total[1];
-        have_prev = true;
-    }
-}
-
-static void setup_cpu_load_task(void)
-{
-    /*
-     * Kern 1, damit die Messung selbst nicht auf demselben Kern rechnet wie der
-     * Mischer. Die Prioritaet ist mit 2 niedrig: die Audio-Tasks (15) behalten
-     * immer Vorrang - eine Messung darf den Ton nicht stoeren.
-     */
-    BaseType_t ret = xTaskCreatePinnedToCore(cpu_load_task, "cpu_load", 3584, NULL, 2, NULL, 1);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "CPU-Last-Task konnte nicht angelegt werden");
-    }
-}
 
 /*
- * Puffer- und Leerlauf-Diagnose.
- *
- * Frage: koennen die Puffer zwischen Zubringer und Mischer leerlaufen?
- * Der Ringpuffer liefert die Antwort selbst - esp_gmf_db_get_filled_size()
- * (esp_gmf_data_bus.h:303) und esp_gmf_db_get_total_size() (Zeile 291).
- *
- * Gemessen wird im Sekundentakt:
- *   - der Fuelstand in Bytes und in Prozent
- *   - wie oft der Puffer beim Abtasten LEER war (Leerlauf)
- *   - der kleinste je gesehene Fuelstand
- *
- * Ist er regelmaessig leer, kann der Mischer nicht rechtzeitig nachliefern -
- * genau das erzeugt Knackser, auch wenn die CPU reserve hat.
- *
- * Die Abtastung ist eine Stichprobe, kein Beweis: ein Puffer kann zwischen zwei
- * Abtastungen leer sein. Fuer die Frage "ist genug Reserve da" reicht das aber,
- * und der Task laeuft mit niedriger Prioritaet (2), stoert den Ton also nicht.
+ * Hier stand bis 0.9.41 die "Puffer- und Leerlauf-Diagnose": ein Task mit
+ * Prioritaet 2, der im Sekundentakt den Fuelstand der Ringpuffer zwischen
+ * Zubringer und Mischer abtastete und Leerlaeufe zaehlte. Sie hat ihren Zweck
+ * erfuellt (Befund: der Puffer lief leer, wenn der Datei-Zweig dazukam) und ist
+ * zusammen mit der Puffer-Diagnose in 0.9.41 entfernt worden. Was bleibt, ist
+ * die einmalige Ausgabe der festen Puffergroessen beim Start.
  */
 
 
@@ -2619,9 +2496,9 @@ static void dump_pipeline_state(const char *what, esp_gmf_pipeline_handle_t pipe
         esp_gmf_event_state_t st = ESP_GMF_EVENT_STATE_NONE;
         esp_gmf_element_get_state(el, &st);
         esp_gmf_element_t *raw = ESP_GMF_ELEMENT_GET(el);
-        printf("  %s[%d] %s: dependency=%d, event_receiver=%s, state=%d\n",
-               what, idx, OBJ_GET_TAG(el), raw->dependency,
-               raw->ops.event_receiver ? "ja" : "NEIN", (int)st);
+        ESP_LOGD(TAG, "  %s[%d] %s: dependency=%d, event_receiver=%s, state=%d",
+                 what, idx, OBJ_GET_TAG(el), raw->dependency,
+                 raw->ops.event_receiver ? "ja" : "NEIN", (int)st);
         idx++;
     }
 }
@@ -2661,7 +2538,6 @@ void stream_proc_init(esp_gmf_pool_handle_t pool)
     setup_pipeline_mixer(pool);
     setup_stream_proc_task();
     setup_local2bt_eof_task();
-    setup_cpu_load_task();
     log_buffer_sizes();
 
 }
