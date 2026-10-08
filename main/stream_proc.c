@@ -170,6 +170,9 @@ static volatile bool local2bt_stop_requested = false;
  */
 static volatile bool i2s2bt_requested = false;
 
+/* Autostart der Uebertragung beim Verbinden (0.9.68), Vorgabe an. */
+static volatile bool s_media_autostart = true;
+
 /* Vorwaertsdeklaration: der Stream-Callback steht weiter oben in der Datei. */
 void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream);
 
@@ -2285,6 +2288,64 @@ void stream_proc_eq_list(void)
     }
 }
 
+/*
+ * Autostart: Uebertragung starten, sobald eine Gegenstelle verbunden ist
+ * (0.9.68).
+ *
+ * Feldmeldung vom 08.10.2026: "habe v4 am laufen, esp32 resetet, hoere aber
+ * keinen sound der v4. nach abspielen des mp3 laeuft der v4 sound." Genau das
+ * war die Luecke: der ESP32 verband sich mit der Senke, startete die
+ * Uebertragung aber nicht. Angestossen wurde sie erst durch MEDIA_START,
+ * PLAY_FILE oder 'start_media' - bis dahin war die Vampire stumm.
+ *
+ * Laeuft im Takt von stream_proc_task (kein eigener Task, kein Stack) und
+ * wiederholt den Versuch alle 5 s, bis die Uebertragung steht. 'stop_media'
+ * schaltet den Autostart ab, eine neue Verbindung schaltet ihn wieder ein.
+ */
+#define MEDIA_AUTOSTART_RETRY_MS  5000
+
+static void stream_proc_autostart_tick(void)
+{
+    static bool    was_connected;
+    static int64_t last_try_us;
+    int64_t        now       = esp_timer_get_time();
+    bool           connected = bt_mgr_is_connected();
+
+    if (connected && !was_connected) {
+        s_media_autostart = true;          /* neue Sitzung, neuer Versuch */
+        last_try_us       = 0;
+    }
+    was_connected = connected;
+
+    if (!connected || !s_media_autostart || bt_mgr_audio_streaming()) {
+        last_try_us = 0;
+        return;
+    }
+    if (last_try_us != 0
+        && (now - last_try_us) < (int64_t)MEDIA_AUTOSTART_RETRY_MS * 1000) {
+        return;
+    }
+    last_try_us = now;
+
+    /* Die Vampire ist der Zweck der Bruecke: ihren I2S-Eingang mitschicken. */
+    i2s2bt_request();
+
+    esp_err_t err = esp_bt_audio_media_start(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC, NULL);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Autostart: Uebertragung angefordert (I2S-Eingang der Vampire)");
+    } else {
+        ESP_LOGW(TAG, "Autostart: Uebertragung abgelehnt: %s", esp_err_to_name(err));
+    }
+}
+
+void stream_proc_set_media_autostart(bool on)
+{
+    if (s_media_autostart != on) {
+        ESP_LOGI(TAG, "Autostart der Uebertragung %s", on ? "an" : "aus");
+    }
+    s_media_autostart = on;
+}
+
 static void stream_proc_task(void *arg)
 {
     (void)arg;
@@ -2302,6 +2363,8 @@ static void stream_proc_task(void *arg)
              * asynchron im BT-Stack).
              */
             bt_mgr_autoconnect_tick();
+            /* 0.9.68: und die Uebertragung starten, sobald eine Senke steht. */
+            stream_proc_autostart_tick();
             continue;
         }
 

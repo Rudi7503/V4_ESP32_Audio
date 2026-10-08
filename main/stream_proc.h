@@ -100,6 +100,17 @@ const char *local2bt_current_uri(void);
 void i2s2bt_request(void);
 
 /**
+ * @brief Autostart der Uebertragung ein-/ausschalten (0.9.68).
+ *
+ * Vorgabe an. Ist er an, sendet der ESP32 den I2S-Eingang der Vampire von
+ * selbst, sobald eine Gegenstelle verbunden ist - ohne ihn bleibt die Vampire
+ * stumm, bis der erste Titel laeuft. 'stop_media' auf der Konsole schaltet ihn
+ * ab, 'start_media' wieder ein; eine neue Verbindung schaltet ihn ebenfalls
+ * wieder ein.
+ */
+void stream_proc_set_media_autostart(bool on);
+
+/**
  * @brief  Stop the I2S pipeline if it is running
  */
 void i2s2bt_stop(void);

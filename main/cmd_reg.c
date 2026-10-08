@@ -533,6 +533,7 @@ static int cmd_stop_discovery(int argc, char **argv)
 
 static int cmd_start_media(int argc, char **argv)
 {
+    stream_proc_set_media_autostart(true);   /* 0.9.68: gewollt, also wieder erlauben */
     esp_err_t ret = esp_bt_audio_media_start(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC, NULL);
     if (ret == ESP_OK) {
         printf("Media started\n");
@@ -544,6 +545,7 @@ static int cmd_start_media(int argc, char **argv)
 
 static int cmd_stop_media(int argc, char **argv)
 {
+    stream_proc_set_media_autostart(false);  /* 0.9.68: ausdruecklich aus */
     esp_err_t ret = esp_bt_audio_media_stop(ESP_BT_AUDIO_CLASSIC_ROLE_A2DP_SRC);
     if (ret == ESP_OK) {
         printf("Media stopped\n");

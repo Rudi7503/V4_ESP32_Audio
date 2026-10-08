@@ -15,6 +15,19 @@ Konsole.
 
 ## Stand
 
+**0.9.68** - **Die Vampire ist sofort hoerbar.** Bisher startete die
+Uebertragung erst durch einen Anstoss (`MEDIA_START`, `PLAY_FILE`,
+`start_media`); nach einem Reset schwieg die V4, bis der erste Titel lief
+(Feldmeldung vom 08.10.2026: *"habe v4 am laufen, esp32 resetet, hoere aber
+keinen sound der v4. nach abspielen des mp3 laeuft der v4 sound."*). Jetzt
+startet `stream_proc_autostart_tick()` die Uebertragung von selbst, sobald eine
+Gegenstelle verbunden ist - samt `i2s2bt_request()`, damit der I2S-Eingang der
+Vampire ueber den Mischer zum Bluetooth-Geraet geht. Der Takt kommt wieder aus
+der 200-ms-Schleife von `stream_proc_task` (kein eigener Task, kein Stack);
+solange keine Uebertragung steht, wird alle 5 s erneut versucht. `stop_media`
+auf der Konsole schaltet den Autostart ab, `start_media` und eine neue
+Verbindung schalten ihn wieder ein. **Noch nicht auf Hardware geprueft.**
+
 **0.9.67** - `MEDIA_START`/`PLAY_FILE` fordern den **I2S-Zweig der Vampire** mit
 an (`i2s2bt_request()` vor dem Streamstart). Ohne das bindet der Stream die
 Datei-Pipeline `local2bt_pipe` an Bluetooth - und die hat seit dem Umbau auf den
