@@ -76,10 +76,44 @@ Dazu neu in `v4_bus`: der kleinste Stack-Rest beider Bruecken-Aufgaben
 (`uxTaskGetStackHighWaterMark`). Damit wird die Frage "reichen 6144 Byte?"
 gemessen statt geschaetzt; gesenkt wurden die Stacks bewusst **nicht**.
 
-**Erwartung fuer den naechsten Lauf:** `free` vor dem `playfile` muss deutlich
-ueber 68 848 liegen (Richtwert 75-76 KB). Bleibt der MP3-Start danach immer
-noch stehen, ist der naechste Hebel der I2S-Eingangspuffer
-(`Datenbus 12288`), der laut docs/MESSREIHE.md Reserve hatte.
+## Geloest - auf Hardware bestaetigt (0.9.63, 08.10.2026)
+
+Mitschnitt `/tmp/test0963b.log` (Stream lief, Senke verbunden, `i2s_media` +
+`start_media`):
+
+```
+>>> free                                   (mit laufendem Stream, vor dem playfile)
+Free heap size: internal 87232, min 85724, groesster Block 53248
+
+>>> playfile test2.mp3
+W ESP_GMF_ASMP_DEC: Not enough memory for out, need:4608, old: 1024, new: 4608
+E LIN_RESAMPLE: DIAG heap: internal frei=48740 | dma 15968 | default frei=15968
+I STREAM_PROC: [a2dp source pipeline] state => RUNNING(3)
+I (56147) ESP_GMF_FILE: No more data, ret: 0
+I (56263) STREAM_PROC: Wiedergabe beendet - stoppe den Datei-Zweig (FINISHED)
+
+>>> playfile test.mp3                       (4,6 MB) lief danach ebenfalls an
+E LIN_RESAMPLE: DIAG heap: internal frei=41396 | dma 8624 groesster 5632
+I LIN_RESAMPLE: Open: 44100 Hz, 2 ch -> 44100 Hz, 2 ch
+I STREAM_PROC: [a2dp source pipeline] state => RUNNING(3)
+```
+
+Kein `Got NULL Pointer`, kein `A2DP Source error`, kein Watchdog-Neustart; der
+Datei-Zweig endet mit **FINISHED** statt ERROR. Der I2S-Zweig der Vampire lief
+durchgehend mit (`I2S-Zweig ausgewaehlt`, Mischer mit zwei Quellen). Der
+Grundfuer den Unterschied ist die Spalte "default frei": vorher 340 Byte (bzw.
+~3,1 KB), jetzt **15 968 Byte** beim ersten und 8 624 Byte beim zweiten Titel -
+die 4608-Byte-Anforderung des Dekoders geht damit durch.
+
+Frei geworden sind mit 0.9.62/0.9.63 zusammen rund 19 KB (87232 statt 68848
+Byte freier Heap bei laufendem Stream).
+
+Der Selbsttest der Bruecke lief nach allen Aenderungen erneut durch
+(`/tmp/selftest963.log`, FILE_OPEN 772778 Byte, FILE_READ 140/268-Byte-Rahmen,
+CRC ok, STOP_PLAY); die Stack-Reserven lagen danach bei 2544 (v4_link) und
+5364 Byte (v4_work).
+
+**0.9.64** entfernt die temporaere Diagnosezeile wieder (sonst unveraendert).
 
 ## Symptom (Mitschnitt /tmp/monitor_mp3c.log, 0.9.60)
 

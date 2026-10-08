@@ -15,28 +15,23 @@ Konsole.
 
 ## Stand
 
-**0.9.62** - Rund 7 KB interner RAM freigemacht, damit der MP3-Dekoder beim
-Start des Datei-Zweigs Platz hat (Messung und Rechnung in
-[`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md)): FatFs teilt sich einen
-Sektor-Cache statt 512 Byte je offener Datei (~4,4 KB), die
-Bluetooth-Geraetetabelle fasst 8 statt 16 Eintraege (`GET_INFO.max_devices`
-meldet das; der Vertrag bleibt bei 16), und der Sendering der I2C-Bruecke ist
-1152 statt 2048 Byte. Aufgaben-Stacks und die in
-[`docs/MESSREIHE.md`](docs/MESSREIHE.md) begruendeten Audiopuffer blieben
-unangetastet; `v4_bus` zeigt jetzt zusaetzlich den kleinsten Stack-Rest beider
-Bruecken-Aufgaben. **Noch nicht auf Hardware geprueft.**
+**0.9.63 auf Hardware verifiziert (08.10.2026)** - **Die MP3 spielt wieder**,
+zusammen mit dem durchgehenden I2S-Ton der Vampire. Ursache und Beleg stehen in
+[`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md): dem Datei-Zweig fehlten im
+DRAM-Bereich (`MALLOC_CAP_DEFAULT`) rund 1,5 KB fuer den 4608-Byte-Ausgangspuffer
+des MP3-Dekoders. Freigemacht wurden zusammen ~19 KB bei laufendem Stream
+(68 848 -> 87 232 Byte frei): FatFs mit einem gemeinsamen Sektor-Cache statt
+512 Byte je Datei, Bluetooth-Geraetetabelle 8 statt 16 Eintraege, Sendering der
+I2C-Bruecke 1152 statt 2048 Byte, ungenutzte BT-Profile (HFP, GOEPCS,
+AVRCP-Cover-Art) aus, I2S-Ringpuffer 10 statt 12 KB und der eigene
+Ausgangspuffer 5120 statt 6144 Byte. Ein Fehler im Datei-Zweig stoppt ausserdem
+die A2DP-Uebertragung nicht mehr - der Vampire-Ton bleibt hoerbar.
+Befehlsfolge der Messung: `i2s_media`, `connect <bda>`, `start_media`, `free`,
+`playfile test2.mp3`, `free`, `playfile test.mp3`, `v4_bus`.
 
-**0.9.61** - Zwei Korrekturen am Datei-Zweig, beide aus der Analyse in
-[`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md):
-(1) Ein Fehler im Datei-Zweig stoppt nicht mehr die ganze A2DP-Uebertragung -
-bisher riss ein gescheitertes `playfile` den I2S-Ton der Vampire mit und
-loeste zusaetzlich einen Task-Watchdog-Neustart aus. (2) Der Wandler fordert
-seinen Ausgangspuffer jetzt mit **einer festen Groesse** an (6144 Byte) statt
-je Block mit einer anderen; die Reallokation, die dabei mit NULL fehlschlug,
-kann damit nur noch einmal auftreten. Dazu laeuft vorerst eine Diagnosezeile
-im `open` des Wandlers (Ausrichtungen, Puffergroesse, freie Bytes je
-Heap-Bereich), die nach der Klaerung wieder entfernt wird.
-Noch **nicht** auf Hardware geprueft - dafuer muss geflasht werden.
+**0.9.64** - nur die temporaere Diagnosezeile im Wandler wieder entfernt
+(Heap-/Ausrichtungsbericht, der den MP3-Startfehler geklaert hat). Sonst
+unveraendert zu 0.9.63.
 
 **0.9.60 auf Hardware verifiziert (08.10.2026)** - Per `usbipd` von WSL aus
 geflasht (ESP32-D0WD-V3, MAC `ec:c9:ff:fd:60:c0`) und am Board geprueft:

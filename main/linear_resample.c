@@ -40,10 +40,8 @@
 #include "esp_gmf_element.h"
 #include "esp_gmf_err.h"
 #include "esp_gmf_info.h"
-#include "esp_gmf_node.h"
 #include "esp_gmf_oal_mem.h"
 #include "esp_gmf_port.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 /* Eigener Header: liefert aud_lin_resample_cfg_t und die oeffentlichen
@@ -303,42 +301,6 @@ static esp_gmf_job_err_t lin_resample_open(esp_gmf_element_handle_t self, void *
     }
     /* Ausgangsformat festschreiben, damit die Folgenglieder es kennen. */
     lin_resample_set_snd_info(self, res->out_rate, LIN_RESAMPLE_OUT_BITS, LIN_RESAMPLE_CHANNELS);
-    /*
-     * DIAGNOSE (temporaer in 0.9.61, kommt nach der Klaerung wieder raus):
-     * Der MP3-Startfehler laesst sich nur verstehen, wenn bekannt ist, welche
-     * Ausrichtung der Ausgangsport verlangt, wie sein Puffer aussieht und wie
-     * viel Speicher in welchem Bereich frei ist. Siehe docs/MP3_STARTFEHLER.md.
-     */
-    {
-        esp_gmf_port_t *out_port = (esp_gmf_port_t *)ESP_GMF_ELEMENT_GET(self)->out;
-        esp_gmf_port_t *next_in = NULL;
-        /* Die Elemente haengen als esp_gmf_node_t in der Kette - genauso greift
-         * auch esp_gmf_port.c darauf zu (esp_gmf_port.c:207). */
-        esp_gmf_node_t *node = (esp_gmf_node_t *)self;
-        if (node->next != NULL) {
-            esp_gmf_element_t *next_el = ESP_GMF_ELEMENT_GET(node->next);
-            if (next_el != NULL) {
-                next_in = (esp_gmf_port_t *)next_el->in;
-            }
-        }
-        ESP_LOGE(TAG, "DIAG port: out addr_align=%u size_align=%u payload=%p buf=%p len=%d needs_free=%d",
-                 out_port ? (unsigned)out_port->attr.buf_addr_aligned : 0,
-                 out_port ? (unsigned)out_port->attr.buf_size_aligned : 0,
-                 out_port ? (void *)out_port->payload : NULL,
-                 (out_port && out_port->payload) ? (void *)out_port->payload->buf : NULL,
-                 (out_port && out_port->payload) ? (int)out_port->payload->buf_length : -1,
-                 (out_port && out_port->payload) ? (int)out_port->payload->needs_free : -1);
-        ESP_LOGE(TAG, "DIAG next_in: addr_align=%u size_align=%u   spiram_cache_align=%u",
-                 next_in ? (unsigned)next_in->attr.buf_addr_aligned : 0,
-                 next_in ? (unsigned)next_in->attr.buf_size_aligned : 0,
-                 (unsigned)esp_gmf_oal_get_spiram_cache_align());
-        ESP_LOGE(TAG, "DIAG heap: internal frei=%u groesster=%u | dma frei=%u groesster=%u | default frei=%u",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-    }
     ESP_LOGI(TAG, "Open: %u Hz, %d ch -> %u Hz, %d ch (Verhaeltnis Q16.16: %d)",
              (unsigned)(res->in_rate ? res->in_rate : res->out_rate), res->in_channels,
              (unsigned)res->out_rate, res->in_channels, (int)res->ratio_fixed);
