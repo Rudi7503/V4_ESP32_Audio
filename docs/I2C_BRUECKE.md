@@ -163,6 +163,58 @@ in beiden Faellen 128 Byte - die Kommentare sind der Rest von Version 2.
 
 ## 6. Status: was geprueft ist - und was nicht
 
+### Auf Hardware gelaufen (08.10.2026, 0.9.60)
+
+Der Stand wurde per `usbipd` von WSL aus geflasht und lief danach auf dem Board
+(ESP32-D0WD-V3, MAC `ec:c9:ff:fd:60:c0`):
+
+| Beobachtung | Ergebnis |
+|---|---|
+| Boot | `V4_ESP32 Version 0.9.60`, uebersetzt 14:28 |
+| SD-Karte | `mounted at /sdcard (SDMMC 1 Bit)` im **ersten** Versuch, 1067 ms - der entfernte SPI-Rueckfall fehlt nicht |
+| I2C-Slave | `v4_link: slave 0x50 on SDA=18 SCL=23, frames 32/128, chunk 128` - der Treiber startet |
+| Bluetooth | `bt_mgr: verbunden mit 66:FE:5A:E3:41:DF` - Ereignisse aus `main.c` kommen in `bt_manager.c` an |
+| `v4_bus` | `BUS SDA=1 SCL=1 ... rx_gesamt=0 verworfen=0` - beide Leitungen im Leerlauf high, noch kein Verkehr |
+| `free` | interner Heap 123 236 Byte frei, Minimum 116 096 |
+| `version` | 0.9.60, Flash 40 MHz |
+| `v4_selftest` | **komplett durchgelaufen, ohne BAD_CRC** |
+
+Der Selbsttest hat dabei zum ersten Mal auf Hardware den **BULK-Weg** gefahren,
+also genau den Teil, der vorher nur gegen den Mock geprueft war:
+
+```
+FILE_OPEN("GamesWinterEdition_v1.0.lha") -> handle 0, 772778 Byte
+FILE_READ(block 0): 128 gueltige Byte, Frame 140 Byte, CRC ok
+FILE_READ(block 6038, hinterm Ende): status=END
+SET_CHUNK(256) -> bestaetigt;  FILE_READ mit chunk=256: Frame 268 Byte - OK
+```
+
+Ebenso auf Hardware bestaetigt: `GET_INFO` (`proto=3 fw=2`), `GET_STATUS`,
+`DIR_OPEN`/`DIR_NEXT` mit echten Amiga-Dateinamen und der Retry-Regel
+("Retry auf Index 1 -> derselbe Eintrag"), `PLAY_FILE`/`STOP_PLAY` (Quelle
+danach wieder I2S), `PATH_*`-Ablehnung von `..` als `BAD_ARG` und
+`NO_HANDLE` bei ungueltigem Handle.
+
+**Was weiterhin NICHT geprueft ist:** die I2C-**Leitung**. Kein Rahmen hat je
+eine echte Vampire erreicht; der Selbsttest ist synthetisch und laesst den Bus
+aus. Offen sind damit Pegel, Takt, Adresse 0x50 und die Wartezeit `t_wait` der
+V4-Seite - dafuer muss `v4_probe` auf der V4 laufen.
+
+**Ein Fehler ist dabei aufgetreten und ist bekannt:** im Selbsttest bleibt
+`PLAY_FILE` einmal auf BUSY stehen, weil der Datei-Zweig angelaufen ist, bevor
+die Mischer-Pipeline `RUNNING` meldete:
+
+```
+E ESP_GMF_PORT: esp_gmf_port.c:284 (esp_gmf_port_acquire_out): Got NULL Pointer
+E LIN_RESAMPLE: lin_resample_process(386): Failed to acquire out, ret: -1
+E ESP_GMF_TASK: Job failed [... aud_lin_resample_file_proc]
+E STREAM_PROC: A2DP Source error
+W v4_link: SELFTEST: cmd 0x60 never settled (still BUSY)
+```
+
+Das ist derselbe Punkt, der schon im Vorgaengerprojekt offen war (siehe §8) -
+hier ohne laufenden A2DP-Stream, also dieselbe Ursache: Start-Reihenfolge.
+
 ### Die Beweislast ist ungleich verteilt
 
 Der **Gegenpart ist auf echter Hardware bewiesen, dieser Slave nicht.** Auf der V4
@@ -229,13 +281,14 @@ keiner der beiden Seiten.
 
 **NICHT geprueft:**
 
-* **Nie geflasht, nie auf Hardware gelaufen.** Kein I2C-Verkehr mit einer echten
-  Vampire, kein A2DP-Test, kein SD-Test.
-* `v4_selftest` ist noch nie ausgefuehrt worden.
+* **Kein I2C-Verkehr mit einer echten Vampire** - der Slave startet und die
+  Leitungen sind im Leerlauf high, aber kein Rahmen ist je ueber den Bus
+  gegangen (siehe der neue Abschnitt oben).
+* Kein A2DP-Test mit laufendem Stream in dieser Sitzung; die Wiedergabe im
+  Selbsttest lief ohne `start_media`.
 * Der Linux-Build ist **nicht** byte-identisch mit dem Windows-Image: in der
   Windows-`sdkconfig` stehen Menue-Einstellungen, die nicht in
-  `sdkconfig.defaults*` liegen. Fuer den Nachweis "uebersetzt" reicht es, fuer
-  einen Vergleich der Images nicht.
+  `sdkconfig.defaults*` liegen. Geflasht wurde der Linux-Build.
 
 ---
 
@@ -243,6 +296,8 @@ keiner der beiden Seiten.
 
 1. Bauen und flashen wie gewohnt (`tools/mess_bauen.ps1`, `tools/flash_only.ps1`,
    danach Stromzyklus - der Chip bleibt sonst im Download-Bootloader).
+   Unter Linux geht das ohne Windows: siehe `tools/README.md`, Abschnitt
+   "Flashen und Lesen unter Linux".
 2. Im Log muss stehen:
    `I (xxxx) v4_link: slave 0x50 on SDA=18 SCL=23, frames 32/128, chunk 128`.
    Fehlt die Zeile, ist `v4_link_init()` gescheitert - die Ursache steht direkt

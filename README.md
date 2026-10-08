@@ -15,6 +15,19 @@ Konsole.
 
 ## Stand
 
+**0.9.60 auf Hardware verifiziert (08.10.2026)** - Per `usbipd` von WSL aus
+geflasht (ESP32-D0WD-V3, MAC `ec:c9:ff:fd:60:c0`) und am Board geprueft:
+SD-Karte mountet im **ersten** Versuch (`mounted at /sdcard (SDMMC 1 Bit)`,
+1067 ms - der entfernte SPI-Rueckfall fehlt nicht), der I2C-Slave startet
+(`slave 0x50 on SDA=18 SCL=23`), `v4_bus` meldet beide Leitungen im Leerlauf
+high (`SDA=1 SCL=1`, noch kein Verkehr), Bluetooth-Ereignisse kommen in
+`bt_manager.c` an (Verbindung mit `66:FE:5A:E3:41:DF`), Heap 123 KB frei.
+`v4_selftest` lief **komplett durch, ohne BAD_CRC** - und hat dabei erstmals auf
+Hardware den **BULK-Weg** gefahren (`FILE_READ`: 128 gueltige Byte im 140-Byte-
+Rahmen, CRC ok, `END` hinterm Dateiende, `chunk=256` bestaetigt). Offen bleibt
+nur die echte I2C-Leitung zur Vampire - Details in
+[`docs/I2C_BRUECKE.md`](docs/I2C_BRUECKE.md), Abschnitt 6.
+
 **0.9.60** - SPI-Rueckfall beim SD-Mount entfernt. `sd_card_mount()` versucht nur
 noch 1-Bit-SDMMC (bis zu 3 Versuche, 4 MHz); der zweite Weg ueber SPI auf
 denselben Leitungen ist weg, ebenso `SD_SPI_MAX_FREQ_KHZ`, die Zustandsmerker

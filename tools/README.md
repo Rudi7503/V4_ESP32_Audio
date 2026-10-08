@@ -19,3 +19,39 @@ D:\Coding\ESP-IDF\.espressif      ESP-IDF v6.1 und Toolchain
 | `idf61_env.ps1` | setzt `IDF_PATH` und die Umgebung fuer ESP-IDF v6.1 |
 | `make_tone48k.py` | erzeugt die Testdateien `test_tone_48k.wav` (48 kHz) und `test_tone_440.wav` (44,1 kHz), je 3 s, mono, 440 Hz, halber Pegel |
 | `rate_conv_model.py` | Modellrechnung zum Vergleich von GMF-Ratenwandlung und linearer Interpolation |
+| `monitor.py` | **Linux-Seite** (WSL): liest den seriellen Monitor und schickt Befehle. `monitor.py 75 version free v4_bus v4_selftest`. Setzt DTR/RTS bewusst auf False (DTR haengt auf GPIO0, RTS auf EN) und versucht einen Reset in den Laufmodus ueber einen RTS-Puls. |
+
+## Flashen und Lesen unter Linux (WSL)
+
+Seit dem 08.10. haengt das Board per `usbipd-win` an WSL, damit unter Linux
+gebaut **und** geflasht werden kann — ohne Windows-Umweg. Ablauf:
+
+```bash
+# einmalig, Windows als Administrator
+winget install --interactive --exact dorssel.usbipd-win
+# einmalig, WSL (Passwort noetig)
+sudo apt install -y linux-tools-virtual hwdata
+sudo update-alternatives --install /usr/local/bin/usbip usbip \
+     $(ls /usr/lib/linux-tools/*/usbip | tail -n1) 20
+sudo modprobe vhci-hcd
+
+# pro Verbindung: Board anstecken, dann
+usbipd list                       # Bus-ID des CP210x suchen
+usbipd bind --busid <ID>          # nur beim ersten Mal, als Administrator
+usbipd attach --wsl --busid <ID>  # danach /dev/ttyUSB0 in WSL
+
+# flashen (Parameter wie flash_only.ps1: kein Reset durch esptool)
+cd build
+ARGS=$(grep -v '^\s*#' flash_args | tr '\n' ' ')
+python -m esptool --chip esp32 -p /dev/ttyUSB0 -b 460800 \
+       --before no-reset --after no-reset write-flash $ARGS
+
+# lesen und bedienen
+python ../tools/monitor.py 75 version free v4_bus v4_selftest
+```
+
+Zwei Eigenheiten: der Chip bleibt nach dem Flashen im Bootloader, und der
+Reset-Puls ueber RTS hilft nicht in jedem Fall — dann EN druecken. Wird das
+Board vom USB getrennt, faellt die Anbindung ab und `usbipd attach` muss
+wiederholt werden. Und: solange das Geraet an WSL haengt, ist es fuer Windows
+weg (COM7 verschwindet), die PowerShell-Skripte laufen dann nicht.
