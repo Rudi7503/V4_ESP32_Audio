@@ -45,9 +45,28 @@ echo "Port     : $PORT"
 echo "Parameter: $ARGS"
 
 cd "$BUILD" || exit 1
+LOG="${TMPDIR:-/tmp}/flash_linux.log"
 python -m esptool --chip esp32 -p "$PORT" -b "$BAUD" \
        --before no-reset --after no-reset \
-       write-flash $ARGS
-RC=$?
-echo "esptool-Ende: $RC"
-exit $RC
+       write-flash $ARGS 2>&1 | tee "$LOG"
+
+# Erfolg wird aus dem LOG gelesen, nicht aus dem Exit-Code: der Exit-Code einer
+# Pipe ist der von tee (docs/ARBEITSWEISE.md, Regel 3).
+if grep -q 'Staying in bootloader' "$LOG"; then
+    echo
+    echo "===================================================================="
+    echo " FLASH FERTIG - JETZT UMSTECKEN!"
+    echo
+    echo "  1. BOOT/GPIO2-Jumper entfernen (bzw. Modul zurueck in den Sockel)."
+    echo "  2. Stromzyklus oder EN druecken."
+    echo
+    echo " Erst danach ist die SD-Karte wieder da: solange GPIO2 (DAT0) auf LOW"
+    echo " gehalten wird, scheitert sdmmc_init_ocr mit 0x107 und die Karte"
+    echo " mountet nicht - und der Chip startet im falschen Bootmodus."
+    echo "===================================================================="
+else
+    echo
+    echo "FLASH FEHLGESCHLAGEN - Log: $LOG"
+    echo "Meist: Chip nicht im Download-Modus (BOOT halten, EN tippen, BOOT loslassen)."
+    exit 1
+fi

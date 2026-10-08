@@ -20,7 +20,41 @@ D:\Coding\ESP-IDF\.espressif      ESP-IDF v6.1 und Toolchain
 | `make_tone48k.py` | erzeugt die Testdateien `test_tone_48k.wav` (48 kHz) und `test_tone_440.wav` (44,1 kHz), je 3 s, mono, 440 Hz, halber Pegel |
 | `rate_conv_model.py` | Modellrechnung zum Vergleich von GMF-Ratenwandlung und linearer Interpolation |
 | `attach_board.sh` | **Linux-Seite** (WSL): haengt das Board nach einem Flashen/USB-Neustart per `usbipd` wieder an WSL (Vorgabe Bus-ID 1-5) und wartet auf `/dev/ttyUSB0`. Nach jedem Flashen faellt die Anbindung ab - ohne diesen Schritt scheitert der naechste Monitorlauf. |
-| `monitor.py` | **Linux-Seite** (WSL): liest den seriellen Monitor und schickt Befehle. `monitor.py 75 version free v4_bus v4_selftest`. Setzt DTR/RTS bewusst auf False (DTR haengt auf GPIO0, RTS auf EN) und versucht einen Reset in den Laufmodus ueber einen RTS-Puls. |
+| `monitor.py` | **Linux-Seite** (WSL): liest den seriellen Monitor und schickt Befehle. `monitor.py 75 version free v4_bus v4_selftest`. Setzt DTR/RTS bewusst auf False (DTR haengt auf GPIO0, RTS auf EN); `--reset` erzwingt einen Reset in den Laufmodus. Mit bash und dem Python aus der IDF-Umgebung aufrufen. |
+| `flash_linux.sh` | **Linux-Seite** (WSL): flasht `build/` ueber `/dev/ttyUSB0` (entschaerft CRLF in `flash_args`) und meldet am Ende **"FLASH FERTIG - JETZT UMSTECKEN"**. Mit bash aufrufen. |
+
+## Ablauf beim Flashen — in dieser Reihenfolge
+
+**Das Wichtigste: nach dem Flashen muss der Anwender es erfahren.** Der
+Flash-Vorgang laeuft im Download-Modus, und der wird auf dieser Platine **von
+Hand** hergestellt (BOOT halten, EN tippen, BOOT loslassen; beim WROVER-Modul
+muss es dafuer aus dem Sockel bzw. ein GPIO0/GPIO2-Jumper gesteckt werden).
+Solange dieser Zustand bleibt, ist das Board nicht betriebsbereit.
+
+```
+1. Download-Modus herstellen          -> Anwender (BOOT/EN, ggf. Modul raus)
+2. Flashen                            -> Skript (flash_linux.sh / flash_only.ps1)
+3. "FLASH FERTIG - JETZT UMSTECKEN"   -> Anwender: Jumper raus, Modul rein,
+                                         Stromzyklus oder EN
+4. Erst jetzt messen und pruefen      -> Monitor, Konsolenbefehle
+```
+
+`tools/flash_linux.sh` gibt die Meldung aus Schritt 3 selbst aus.
+
+**Was sie verhindert** (am 08.10. teuer gelernt): bleibt der GPIO2-Jumper
+gesteckt, haelt DAT0 die Leitung LOW, und dann passiert beim naechsten Start:
+
+```
+I SD_CARD: Card detect (GPIO34): card inserted
+E sdmmc_common: sdmmc_init_ocr: send_op_cond (1) returned 0x107
+E vfs_fat_sdmmc: sdmmc_card_init failed (0x107).
+E SD_CARD: mount failed: ESP_ERR_TIMEOUT
+```
+
+Die Karte mountet dann **nicht**. Ohne Karte geht kein `playfile` - das sieht
+wie ein Firmware-Fehler aus, ist aber einer der Verkabelung. Zwei Stellen im
+Log verraten es: `0x107` **und** ein abweichender Bootmodus (`boot:0x13` statt
+`boot:0x1b`).
 
 ## Flashen und Lesen unter Linux (WSL)
 
