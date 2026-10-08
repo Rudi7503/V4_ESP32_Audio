@@ -64,7 +64,22 @@ extern "C" {
  * 'v4_bus' zeigt den kleinsten Rest seit dem Start; faellt er unter ~1 KB,
  * gehoert der Stack wieder erhoeht.
  */
-#define V4_TASK_STACK           5120
+/*
+ * Zwei Aufgaben, zwei Groessen (0.9.74).
+ *
+ * Vorher bekamen beide 6144 Byte = 12 KB Heap - auf einem Modul ohne PSRAM der
+ * groesste Einzelposten der Bruecke und der Grund, warum der MP3-Start mit
+ * eingeschalteten BT-Profilen keinen Platz mehr hatte. Gemessen mit echtem
+ * V4-Verkehr (225 PLAY_FILE, 1024 Rahmen, /tmp/v4_traffic.log):
+ *
+ *   v4_link (dispatch -> sd_fs -> VFS -> FatFs): 2352 Byte gebraucht
+ *   v4_work (verzoegerte Arbeit, flach):          780 Byte gebraucht
+ *
+ * 4096 bzw. 2560 lassen beiden rund 1,7 KB Reserve; 'v4_bus' zeigt den
+ * kleinsten Rest seit dem Start an.
+ */
+#define V4_LINK_TASK_STACK      4096
+#define V4_WORK_TASK_STACK      2560
 #define V4_TASK_PRIO            6
 
 /**

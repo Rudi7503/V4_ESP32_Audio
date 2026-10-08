@@ -1735,12 +1735,12 @@ void v4_link_bus_report(void)
     if (s_link_task_h != NULL) {
         ESP_LOGI(TAG, "Stack v4_link: %u Byte von %u frei (Minimum seit Start)",
                  (unsigned)(uxTaskGetStackHighWaterMark(s_link_task_h) * sizeof(StackType_t)),
-                 (unsigned)V4_TASK_STACK);
+                 (unsigned)V4_LINK_TASK_STACK);
     }
     if (s_work_task_h != NULL) {
         ESP_LOGI(TAG, "Stack v4_work: %u Byte von %u frei (Minimum seit Start)",
                  (unsigned)(uxTaskGetStackHighWaterMark(s_work_task_h) * sizeof(StackType_t)),
-                 (unsigned)V4_TASK_STACK);
+                 (unsigned)V4_WORK_TASK_STACK);
     }
 }
 
@@ -1803,13 +1803,13 @@ esp_err_t v4_link_init(void)
         return err;
     }
 
-    BaseType_t ok = xTaskCreate(v4_link_task, "v4_link", V4_TASK_STACK, NULL,
+    BaseType_t ok = xTaskCreate(v4_link_task, "v4_link", V4_LINK_TASK_STACK, NULL,
                                 V4_TASK_PRIO, &s_link_task_h);
     ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "no mem for task");
 
     /* Same priority as the protocol task: neither may starve the other, and the
      * self test waits on this one from the protocol task. */
-    BaseType_t wok = xTaskCreate(v4_work_task, "v4_work", V4_TASK_STACK, NULL,
+    BaseType_t wok = xTaskCreate(v4_work_task, "v4_work", V4_WORK_TASK_STACK, NULL,
                                  V4_TASK_PRIO, &s_work_task_h);
     ESP_RETURN_ON_FALSE(wok == pdPASS, ESP_ERR_NO_MEM, TAG, "no mem for work task");
 

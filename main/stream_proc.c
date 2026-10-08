@@ -1612,7 +1612,7 @@ static void setup_pipeline_i2s2bt(esp_gmf_pool_handle_t pool)
  * und der Datenstrom ist danach um 2 Byte verschoben. Hoerbar als Verzerrung
  * ab dem zweiten Titel (die erste Datei lief, weil der Ring da leer war).
  */
-#define FILE_DB_ITEMS       8
+#define FILE_DB_ITEMS       8      /* siehe Begruendung oben (ein Block = 5016 Byte) */
 
 static esp_gmf_err_t setup_pipeline_mixer(esp_gmf_pool_handle_t pool)
 {

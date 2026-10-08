@@ -42,7 +42,16 @@ extern "C" {
  * unangetastet: GET_INFO.max_devices meldet die tatsaechlich unterstuetzte
  * Zahl, und die Vampire liest diesen Wert (sie prueft nicht auf 16).
  */
-#define BT_MGR_MAX_DEVICES  8
+/*
+ * 8 -> 4 (0.9.74): Die BT-Profile HFP/GOEPCS/Cover-Art kosten rund 12 KB
+ * internen Speicher (gemessen: 87232 Byte frei ohne sie, 74808 mit ihnen).
+ * Sie muessen aber AN bleiben - ohne sie verdoppelt sich die CPU-Last des
+ * Mischer-Tasks (17 % -> 33 %, Mitschnitte /tmp/eq_test.log gegen
+ * /tmp/audio_973.log). Die 4 KB fuer den MP3-Start kommen deshalb hier und bei
+ * zwei weiteren Puffern her. Vier gemerkte Geraete reichen; die Bindung selbst
+ * liegt weiterhin in Bluedroids NVS.
+ */
+#define BT_MGR_MAX_DEVICES  4
 
 typedef struct {
     esp_bd_addr_t bda;

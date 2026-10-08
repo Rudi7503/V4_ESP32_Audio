@@ -28,6 +28,21 @@ V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
 
 ## Stand
 
+**0.9.74** - **Ton sauber UND MP3 moeglich.** Zwei Messergebnisse aus derselben
+Sitzung:
+1. Die in 0.9.63 abgeschalteten BT-Profile (HFP, GOEPCS, AVRCP-Cover-Art) sind
+   die Ursache der kratzigen Wiedergabe: mit ihnen **an** liegt der Mischer-Task
+   bei 16,3 % und Kern 1 hat 22,9 % Leerlauf, mit ihnen **aus** bei 33,0 % und
+   1,3 % (Vergleich 0.9.56: 17,5 % / 23,0 %). Sie sind deshalb wieder an.
+2. Sie kosten aber rund **12,4 KB** internen Speicher (95 232 Byte frei in
+   0.9.56 ohne Bruecke, 87 232 mit Bruecke und ohne Profile, 74 808 mit beidem) -
+   und damit fehlte der MP3-Start wieder. Die 8 KB kommen jetzt aus der Bruecke
+   selbst: ihre beiden Aufgaben brauchten gemessen nur 2352 bzw. 780 Byte,
+   hatten aber je 6144 (zusammen 12 KB). Jetzt 4096 + 2560, Gerätetabelle 4
+   statt 8 Eintraege, Haupttask-Stack 3072 statt 3584. Der Datei-Ring bleibt bei
+   den dokumentierten 8 KB. `v4_bus` zeigt weiterhin beide Stack-Reserven und
+   `bufs` Ringpegel, Mischerzustand und CPU-Last.
+
 **0.9.73** - **Equalizer ueber I2C.** Neu im Vertrag: `EQ_INFO` (0x70),
 `EQ_BANDS` (0x71), `EQ_GET` (0x72) und `EQ_SET` (0x73). Damit schliesst sich die
 Luecke aus [`docs/I2C_ERWEITERN.md`](docs/I2C_ERWEITERN.md) - bisher gab es den
