@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "i2s_input.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -2541,7 +2542,7 @@ static void log_buffer_sizes(void)
 {
     ESP_LOGI(TAG, "Puffergroessen:");
     ESP_LOGI(TAG, "  I2S-Eingang (io_i2s): Datenbus %d Byte, Lesevorgang %d Byte",
-             12 * 1024, 2048);
+             I2S_INPUT_DB_BYTES, I2S_INPUT_READ_BYTES);
     ESP_LOGI(TAG, "  Ringpuffer Zubringer->Mischer: I2S %d x %d = %d Byte, Datei %d x %d = %d Byte (zusammen %d)",
              MIXER_DB_ITEMS, MIXER_DB_ITEM_SIZE, MIXER_DB_ITEMS * MIXER_DB_ITEM_SIZE,
              FILE_DB_ITEMS, MIXER_DB_ITEM_SIZE, FILE_DB_ITEMS * MIXER_DB_ITEM_SIZE,

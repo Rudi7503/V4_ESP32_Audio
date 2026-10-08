@@ -8,9 +8,23 @@
 #include "esp_err.h"
 #include "esp_gmf_io.h"
 
+/*
+ * Groessen des I2S-Eingangsdatenbusses (0.9.63).
+ *
+ * Bis 0.9.62 stand in stream_proc.c/log_buffer_sizes() fest "12 * 1024" - die
+ * Senkung auf 6 KB aus 0.9.31 war dort nie nachgezogen und hat die Fehlersuche
+ * um den MP3-Startfehler in die Irre gefuehrt. Jetzt gibt es die Werte einmal,
+ * und der Bericht liest sie hier.
+ *
+ * ACHTUNG: ausserhalb des extern-"C"-Blocks, sonst sieht der C-Compiler sie
+ * nicht (dieser Fehler ist beim Bau von 0.9.63 passiert).
+ */
+#define I2S_INPUT_DB_BYTES      6144    /* Datenbus (esp_gmf_io buffer_size) */
+#define I2S_INPUT_READ_BYTES    2048    /* ein Lesevorgang daraus (io_size)  */
+
 #ifdef __cplusplus
 extern "C" {
-#endif  /* __cplusplus */
+#endif
 
 /**
  * @brief  Create the I2S input that receives the Vampire's audio

@@ -183,7 +183,7 @@ esp_err_t i2s_input_create(esp_gmf_io_handle_t *io)
      */
     io_cfg.io_cfg.thread.core = 1;
     io_cfg.io_cfg.thread.stack_in_ext = true;
-    io_cfg.io_cfg.buffer_cfg.io_size = 2048;
+    io_cfg.io_cfg.buffer_cfg.io_size = I2S_INPUT_READ_BYTES;
     /*
      * 12 KB statt 16 KB (geaendert 03.10.).
      *
@@ -208,7 +208,7 @@ esp_err_t i2s_input_create(esp_gmf_io_handle_t *io)
      * Der Datenbus ist mit 2048 Byte Lesevorgang auch mit 6 KB noch
      * dreifach ueberdimensioniert.
      */
-    io_cfg.io_cfg.buffer_cfg.buffer_size = 6 * 1024;
+    io_cfg.io_cfg.buffer_cfg.buffer_size = I2S_INPUT_DB_BYTES;
 
     /*
      * Kein Durchsatz-Monitor (0.9.58).
