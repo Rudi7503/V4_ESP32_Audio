@@ -111,6 +111,14 @@ void i2s2bt_request(void);
 void stream_proc_set_media_autostart(bool on);
 
 /**
+ * @brief Obergrenze fuer den SBC-Bitpool setzen (0 = Vorgabe, 1..250).
+ *
+ * Wirkt beim naechsten Streamstart. Dient der Messung von CPU-Last und
+ * Streckenbelastung gegen die Tonqualitaet.
+ */
+void stream_proc_set_sbc_bitpool_cap(int bitpool);
+
+/**
  * @brief Zustand von Ringen, Mischer und Zweigen auf der Konsole ausgeben.
  *
  * Nur auf Abruf (Kommando 'bufs'): eine periodische Puffer-Diagnose hat den

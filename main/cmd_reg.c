@@ -902,6 +902,22 @@ static int free_mem(int argc, char **argv)
 
 /** 'tasks' command prints the list of tasks and related information */
 /** 'bufs' - Zustand der Ringpuffer und der Zweige, dann die CPU-Last. */
+/** 'sbc bitpool <n>' - Obergrenze fuer den SBC-Bitpool (0 = Vorgabe). */
+static int cmd_sbc(int argc, char **argv)
+{
+    if (argc == 1) {
+        printf("SBC-Bitpool-Obergrenze: siehe Log; Aufruf: sbc bitpool <1..250|0>\n");
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "bitpool") == 0) {
+        stream_proc_set_sbc_bitpool_cap(atoi(argv[2]));
+        printf("Wirkt beim naechsten Streamstart (stop_media; start_media).\n");
+        return 0;
+    }
+    printf("Aufruf: sbc bitpool <1..250|0>\n");
+    return 1;
+}
+
 static int bufs_info(int argc, char **argv)
 {
     (void)argc;
@@ -1189,6 +1205,11 @@ void cli_register_sys()
             .help = "Get the current size of free heap memory",
             .hint = NULL,
             .func = &free_mem,
+        },
+        {
+            .command = "sbc",
+            .help = "SBC-Bitpool deckeln: sbc bitpool <1..250|0>",
+            .func = &cmd_sbc,
         },
         {
             .command = "bufs",

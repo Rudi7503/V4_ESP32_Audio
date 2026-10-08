@@ -15,6 +15,17 @@ Konsole.
 
 ## Stand
 
+**0.9.71** - **Bitpool-Messschalter.** Die CPU-Messung mit `bufs` zeigt: der
+Mischer-Task braucht **31 % der Gesamt-CPU, auch ohne jede Quelle** (also
+≈62 % von Kern 1) - das ist der **SBC-Encoder**; der Equalizer kostet dagegen
+nichts (32,4 % -> 32,9 % mit 0 Baendern). Die Komponente waehlt fuer Stereo
+selbst den Maximalwert `A2DP_SRC_BITPOOL_STEREO_DEFAULT = 53` (~327 kbit/s,
+gedeckelt auf das Maximum der Senke). Der Bitpool darf laut A2DP frei in
+[min,max] gewaehlt werden, deshalb jetzt messbar:
+`sbc bitpool <1..250|0>` deckelt ihn fuer den naechsten Streamstart (der
+ausgehandelte Block bleibt unangetastet, gearbeitet wird auf einer Kopie).
+Damit laesst sich CPU-Last gegen Tonqualitaet abwaegen, ohne zu raten.
+
 **0.9.69** - **I2S-Ringpuffer wieder 12 KB.** In 0.9.63 wurden hier 2 KB fuer den
 MP3-Dekoder abgezweigt (10 statt 12 KB); Feldmeldung vom 08.10.2026: *"sound ist
 kratzig"* - genau die Aussetzer, vor denen der Kommentar damals gewarnt hat. Die

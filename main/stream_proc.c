@@ -173,6 +173,20 @@ static volatile bool i2s2bt_requested = false;
 /* Autostart der Uebertragung beim Verbinden (0.9.68), Vorgabe an. */
 static volatile bool s_media_autostart = true;
 
+/*
+ * Obergrenze fuer den SBC-Bitpool (0.9.71), 0 = Vorgabe der Komponente.
+ *
+ * esp_bt_audio waehlt fuer Stereo 53 (A2DP_SRC_BITPOOL_STEREO_DEFAULT) und
+ * deckelt nur auf das Maximum der Senke - in unserem Fall ebenfalls 53. Das
+ * sind rund 327 kbit/s: viel Rechenzeit im Encoder (gemessen 31 % der
+ * Gesamt-CPU allein fuer den Mischer-Task ohne jede Quelle, /tmp/eq_test.log)
+ * und viel Luft auf der 2,4-GHz-Strecke. Der Bitpool darf laut A2DP frei
+ * innerhalb [min,max] der Senke gewaehlt werden - hier lässt sich das messen:
+ *
+ *   sbc bitpool 35   -> naechster Streamstart uebernimmt den Wert
+ */
+static volatile int s_sbc_bitpool_cap;
+
 /* Vorwaertsdeklaration: der Stream-Callback steht weiter oben in der Datei. */
 void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream);
 
@@ -2103,6 +2117,25 @@ void i2s2bt_set_stream(esp_bt_audio_stream_handle_t stream)
                 .cfg    = codec_info.codec_cfg,
                 .cfg_sz = codec_info.cfg_size,
             };
+            /*
+             * 0.9.71: Bitpool deckeln, falls gewuenscht. Der ausgehandelte
+             * Block ist ein esp_sbc_enc_config_t (die Komponente druckt genau
+             * dessen Felder); gearbeitet wird auf einer lokalen Kopie, damit
+             * die Aushandlung selbst unangetastet bleibt.
+             */
+            esp_sbc_enc_config_t sbc_local;
+            if (s_sbc_bitpool_cap > 0 && enc_cfg.cfg_sz >= sizeof(sbc_local)) {
+                /* ERST kopieren, dann pruefen - sbc_local ist vorher uninitialisiert
+                 * (dieser Fehler steckte im ersten Wurf von 0.9.71). */
+                memcpy(&sbc_local, enc_cfg.cfg, sizeof(sbc_local));
+                if ((int)sbc_local.bitpool > s_sbc_bitpool_cap) {
+                    ESP_LOGW(TAG, "SBC-Bitpool %u -> %d gedeckelt (CPU/Strecke)",
+                             (unsigned)sbc_local.bitpool, s_sbc_bitpool_cap);
+                    sbc_local.bitpool = (uint16_t)s_sbc_bitpool_cap;
+                    enc_cfg.cfg = &sbc_local;
+                    enc_cfg.cfg_sz = (uint32_t)sizeof(sbc_local);
+                }
+            }
             ret = esp_gmf_audio_enc_reconfig(enc, &enc_cfg);
             if (ret != ESP_GMF_ERR_OK) {
                 ESP_LOGE(TAG, "Ausgehandelte SBC-Parameter nicht uebernommen: %d", ret);
@@ -2375,6 +2408,13 @@ void stream_proc_buffer_report(void)
            local2bt_is_playing() ? "spielt" : "aus",
            bt_mgr_audio_streaming() ? "laeuft" : "haelt",
            s_media_autostart ? "an" : "aus");
+}
+
+void stream_proc_set_sbc_bitpool_cap(int bitpool)
+{
+    s_sbc_bitpool_cap = (bitpool > 0 && bitpool <= 250) ? bitpool : 0;
+    ESP_LOGI(TAG, "SBC-Bitpool-Obergrenze: %s",
+             s_sbc_bitpool_cap > 0 ? "gesetzt (naechster Stream)" : "aus (Komponenten-Vorgabe)");
 }
 
 void stream_proc_set_media_autostart(bool on)
