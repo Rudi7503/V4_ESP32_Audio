@@ -34,6 +34,53 @@ nicht durch die I2C-Bruecke entstanden** (siehe A/B-Test unten).
    offene Frage aus dem Abschnitt "Was noch offen ist" und **wird nach der
    Klaerung wieder entfernt**.
 
+## Speicher nachgerechnet und freigemacht (0.9.62, 08.10.2026)
+
+Mitschnitt `/tmp/heap_mp3.log` (0.9.61, Stream lief, Senke verbunden):
+
+```
+>>> free                    (vor dem playfile)
+Free heap size: internal 68848      groesster Block: 34816
+>>> playfile test2.mp3
+E ESP_GMF_PAYLOAD: esp_gmf_payload.c:92 ...: Got NULL Pointer
+E BT_OSI: heap info: free=340, largest_block=120        <- Heap wirklich leer
+E STREAM_PROC: Fehler im Datei-Zweig - Wiedergabe wird beendet, Stream laeuft weiter
+E BT_OSI: heap info: free=38756, largest_block=27648    <- danach wieder frei
+>>> free                    (nach dem Fehler)
+Free heap size: internal 74580      groesster Block: 28672
+```
+
+Rechnung: der Datei-Zweig belegt beim Oeffnen 68 508 Byte (68 848 - 340) und
+braucht dann noch die 4608 Byte fuer den Ausgangspuffer des Dekoders
+(`Not enough memory for out, need:4608`). Bedarf also ~73 116 Byte, verfuegbar
+waren 68 848 - **es fehlten rund 4,3 KB**. Der groesste freie Block (34 816)
+war gross genug; es war reine Menge, keine Zersplitterung.
+
+Diese 4,3 KB sind in 0.9.62 freigemacht worden, ohne den Vertrag, die
+Aufgaben-Stacks oder die (in docs/MESSREIHE.md begruendeten) Audiopuffer
+anzutasten:
+
+| Massnahme | Datei | frei |
+|---|---|---|
+| FatFs: **ein** gemeinsamer Sektor-Cache statt 512 Byte je offener Datei (`CONFIG_FATFS_PER_FILE_CACHE` aus -> `_FS_TINY=1`) | `sdkconfig`, `sdkconfig.defaults.esp32.nopsram` | ~4,4 KB |
+| Geraetetabelle 16 -> 8 Eintraege (`BT_MGR_MAX_DEVICES`; der Vertrag bleibt bei 16, GET_INFO meldet die unterstuetzte Zahl) | `bt_manager.h/.c`, `v4_link.c` | 2,0 KB |
+| Sendering der I2C-Bruecke 2048 -> 1152 Byte (Rahmen ist 1036) | `v4_link.h` | 0,9 KB |
+
+Der FatFs-Posten ist der groesste: `vfs_fat.c:203` legt
+`sizeof(vfs_fat_ctx_t) + max_files * sizeof(FIL)` an, und `FIL` traegt ohne
+`_FS_TINY` einen eigenen 512-Byte-Puffer. `max_files = 8` bleibt trotzdem
+richtig (4 Datei-Handles + 2 Verzeichnis-Handles + 1 GMF-Spieler + Luft) - mit
+gemeinsamem Cache kostet es fast nichts.
+
+Dazu neu in `v4_bus`: der kleinste Stack-Rest beider Bruecken-Aufgaben
+(`uxTaskGetStackHighWaterMark`). Damit wird die Frage "reichen 6144 Byte?"
+gemessen statt geschaetzt; gesenkt wurden die Stacks bewusst **nicht**.
+
+**Erwartung fuer den naechsten Lauf:** `free` vor dem `playfile` muss deutlich
+ueber 68 848 liegen (Richtwert 75-76 KB). Bleibt der MP3-Start danach immer
+noch stehen, ist der naechste Hebel der I2S-Eingangspuffer
+(`Datenbus 12288`), der laut docs/MESSREIHE.md Reserve hatte.
+
 ## Symptom (Mitschnitt /tmp/monitor_mp3c.log, 0.9.60)
 
 ```

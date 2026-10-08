@@ -30,6 +30,20 @@ extern "C" {
  * asserts at compile time that the two still match. */
 #define BT_MGR_NAME_LEN     248
 
+/*
+ * Groesse der Geraetetabelle (0.9.62).
+ *
+ * Der Vertrag (v4_proto.h, V4P_MAX_DEVICES) laesst 16 Eintraege zu je 256 Byte
+ * zu; die Tabelle liegt aber im knappen internen RAM des Moduls ohne PSRAM und
+ * kostet damit 4 KB. Genau diese 4 KB fehlten dem MP3-Dekoder, wenn der
+ * Datei-Zweig startete (docs/MP3_STARTFEHLER.md).
+ *
+ * Acht gemerkte Geraete reichen fuer den Anwendungsfall. Der Vertrag bleibt
+ * unangetastet: GET_INFO.max_devices meldet die tatsaechlich unterstuetzte
+ * Zahl, und die Vampire liest diesen Wert (sie prueft nicht auf 16).
+ */
+#define BT_MGR_MAX_DEVICES  8
+
 typedef struct {
     esp_bd_addr_t bda;
     char          name[BT_MGR_NAME_LEN + 1];

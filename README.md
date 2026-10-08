@@ -15,6 +15,17 @@ Konsole.
 
 ## Stand
 
+**0.9.62** - Rund 7 KB interner RAM freigemacht, damit der MP3-Dekoder beim
+Start des Datei-Zweigs Platz hat (Messung und Rechnung in
+[`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md)): FatFs teilt sich einen
+Sektor-Cache statt 512 Byte je offener Datei (~4,4 KB), die
+Bluetooth-Geraetetabelle fasst 8 statt 16 Eintraege (`GET_INFO.max_devices`
+meldet das; der Vertrag bleibt bei 16), und der Sendering der I2C-Bruecke ist
+1152 statt 2048 Byte. Aufgaben-Stacks und die in
+[`docs/MESSREIHE.md`](docs/MESSREIHE.md) begruendeten Audiopuffer blieben
+unangetastet; `v4_bus` zeigt jetzt zusaetzlich den kleinsten Stack-Rest beider
+Bruecken-Aufgaben. **Noch nicht auf Hardware geprueft.**
+
 **0.9.61** - Zwei Korrekturen am Datei-Zweig, beide aus der Analyse in
 [`docs/MP3_STARTFEHLER.md`](docs/MP3_STARTFEHLER.md):
 (1) Ein Fehler im Datei-Zweig stoppt nicht mehr die ganze A2DP-Uebertragung -

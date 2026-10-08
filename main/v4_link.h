@@ -42,8 +42,16 @@ extern "C" {
 #define V4_I2C_SDA_IO           GPIO_NUM_18
 #define V4_I2C_ADDR             0x50
 
-/* Must be >= V4P_BULK_FRAME_MAX so a full chunk fits into the TX ring buffer. */
-#define V4_TX_BUF_DEPTH         2048
+/*
+ * Muss >= V4P_BULK_FRAME_MAX (1036) sein, damit ein voller Block in den
+ * Sendering passt.
+ *
+ * 2048 -> 1152 (0.9.62): die 2 KB waren Reserve, die auf einem Modul ohne PSRAM
+ * an anderer Stelle fehlt (MP3-Dekoder, docs/MP3_STARTFEHLER.md). 1152 Byte
+ * fassen einen vollstaendigen Rahmen und lassen 116 Byte Luft; der Master liest
+ * je Anforderung genau einen Rahmen.
+ */
+#define V4_TX_BUF_DEPTH         1152
 /* The master writes 32 byte commands; a little headroom for the queues. */
 #define V4_RX_BUF_DEPTH         64
 #define V4_RX_QUEUE_LEN         4

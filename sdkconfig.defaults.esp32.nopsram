@@ -125,3 +125,17 @@ CONFIG_BOOTLOADER_LOG_LEVEL=3
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 
+
+#
+# FatFs: EIN gemeinsamer Sektor-Cache statt 512 Byte je offener Datei (0.9.62)
+#
+# Vorgabe ist "Use separate cache for each file" (_FS_TINY=0): dann belegt JEDE
+# der max_files=8 Dateien einen eigenen 512-Byte-Cache - rund 4,4 KB interner
+# RAM, der auf einem Modul ohne PSRAM fehlt. Genau diese Groessenordnung fehlte
+# dem MP3-Dekoder beim Start des Datei-Zweigs (docs/MP3_STARTFEHLER.md).
+#
+# Mit _FS_TINY=1 teilen sich alle offenen Dateien einen Cache. Der Zugriff ist
+# hier sequenziell (Audio-Streaming von der SD), der gemeinsame Cache reicht;
+# FatFs macht dafuer etwas mehr Lese-/Schreibzugriffe auf die Karte.
+#
+# CONFIG_FATFS_PER_FILE_CACHE is not set

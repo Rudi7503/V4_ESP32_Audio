@@ -52,7 +52,7 @@ static const char *TAG = "bt_mgr";
  * wird nie automatisch geleert - sonst waere die Liste waehrend einer laufenden
  * Verbindung leer (das war im Urprojekt der Fehler, den bt_manager behoben hat).
  */
-static bt_mgr_dev_t  s_devs[V4P_MAX_DEVICES];
+static bt_mgr_dev_t  s_devs[BT_MGR_MAX_DEVICES];
 static int           s_dev_count;
 static uint16_t      s_scan_gen;
 
@@ -105,7 +105,7 @@ esp_err_t bt_mgr_init(void)
     memset(s_conn_bda, 0, sizeof(s_conn_bda));
 
     ESP_LOGI(TAG, "Geraeteliste bereit (max %d Eintraege), Auto-Scan %s",
-             V4P_MAX_DEVICES, s_auto_scan ? "an" : "aus");
+             BT_MGR_MAX_DEVICES, s_auto_scan ? "an" : "aus");
     return ESP_OK;
 }
 
@@ -126,11 +126,11 @@ void bt_mgr_evt_discovered(const char *name, const uint8_t *bda)
 
     int idx = find_bda(bda);
     if (idx < 0) {
-        if (s_dev_count >= V4P_MAX_DEVICES) {
+        if (s_dev_count >= BT_MGR_MAX_DEVICES) {
             /* Tabelle voll: lieber einen Eintrag verlieren als die Liste
              * umwerfen - die Indizes, die der Master schon gelesen hat, bleiben
              * damit gueltig. */
-            ESP_LOGD(TAG, "Geraetetabelle voll (%d), neuer Fund verworfen", V4P_MAX_DEVICES);
+            ESP_LOGD(TAG, "Geraetetabelle voll (%d), neuer Fund verworfen", BT_MGR_MAX_DEVICES);
             return;
         }
         idx = s_dev_count++;

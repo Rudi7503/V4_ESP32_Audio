@@ -141,6 +141,16 @@ static uint8_t  s_bulk_status;
  * protocol task touches it, so this is safe. */
 static uint8_t  s_resp[V4P_BULK_FRAME_MAX];
 
+/*
+ * Aufgaben-Handles nur fuer die Stack-Auslastung im 'v4_bus'-Bericht (0.9.62).
+ *
+ * Die Kommandowege der Bruecke nesten tief (dispatch -> sd_fs -> VFS -> FatFs),
+ * deshalb wird V4_TASK_STACK bei jeder Gelegenheit geprueft statt geschaetzt:
+ * steht in v4_bus "rest" nahe 0, ist der Stack zu knapp.
+ */
+static TaskHandle_t s_link_task_h;
+static TaskHandle_t s_work_task_h;
+
 /* deferred (after-reply) work */
 static uint8_t  s_defer_handle;
 static uint16_t s_defer_block;
@@ -269,7 +279,7 @@ static void fill_info_payload(uint8_t *out)
     out[3] = V4P_READ_FRAME_LEN;
     v4p_put_u16le(&out[4], V4P_BULK_PAYLOAD_MAX);
     v4p_put_u16le(&out[6], s_chunk);
-    out[8] = V4P_MAX_DEVICES;
+    out[8] = BT_MGR_MAX_DEVICES;
     out[9] = V4P_PATH_MAX;
     out[10] = 0;
     out[11] = 0;
@@ -1513,6 +1523,17 @@ void v4_link_bus_report(void)
     ESP_LOGI(TAG, "BUS SDA=%d SCL=%d (Leerlauf muss 1/1 sein)  rx_gesamt=%u  verworfen=%u",
              gpio_get_level(V4_I2C_SDA_IO), gpio_get_level(V4_I2C_SCL_IO),
              (unsigned)s_rx_count, (unsigned)s_rx_bad);
+    /* Kleinster Rest seit dem Start, in Byte. Nahe 0 heisst: Stack zu knapp. */
+    if (s_link_task_h != NULL) {
+        ESP_LOGI(TAG, "Stack v4_link: %u Byte von %u frei (Minimum seit Start)",
+                 (unsigned)(uxTaskGetStackHighWaterMark(s_link_task_h) * sizeof(StackType_t)),
+                 (unsigned)V4_TASK_STACK);
+    }
+    if (s_work_task_h != NULL) {
+        ESP_LOGI(TAG, "Stack v4_work: %u Byte von %u frei (Minimum seit Start)",
+                 (unsigned)(uxTaskGetStackHighWaterMark(s_work_task_h) * sizeof(StackType_t)),
+                 (unsigned)V4_TASK_STACK);
+    }
 }
 
 static void v4_link_task(void *arg)
@@ -1575,13 +1596,13 @@ esp_err_t v4_link_init(void)
     }
 
     BaseType_t ok = xTaskCreate(v4_link_task, "v4_link", V4_TASK_STACK, NULL,
-                                V4_TASK_PRIO, NULL);
+                                V4_TASK_PRIO, &s_link_task_h);
     ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "no mem for task");
 
     /* Same priority as the protocol task: neither may starve the other, and the
      * self test waits on this one from the protocol task. */
     BaseType_t wok = xTaskCreate(v4_work_task, "v4_work", V4_TASK_STACK, NULL,
-                                 V4_TASK_PRIO, NULL);
+                                 V4_TASK_PRIO, &s_work_task_h);
     ESP_RETURN_ON_FALSE(wok == pdPASS, ESP_ERR_NO_MEM, TAG, "no mem for work task");
 
     ESP_LOGI(TAG, "slave 0x%02x on SDA=%d SCL=%d, frames %d/%d, chunk %u",
