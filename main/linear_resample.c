@@ -100,7 +100,7 @@ static const char *TAG = "LIN_RESAMPLE";
  * 4608-Byte-Ausgangspuffer im selben Moment (docs/MP3_STARTFEHLER.md). 5120
  * deckt den berechneten Bedarf genau ab.
  */
-#define LIN_RESAMPLE_OUT_PAYLOAD_MAX 5120
+/* LIN_RESAMPLE_OUT_PAYLOAD_MAX steht in linear_resample.h (0.9.75) */
 
 /*
  * Ein Sample lesen - je nach Eingangsformat.

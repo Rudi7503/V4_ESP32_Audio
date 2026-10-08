@@ -28,6 +28,22 @@ V4 gehen erst **nach** dem Umstecken und dem Stromzyklus.
 
 ## Stand
 
+**0.9.75** - **Puffer frueh reservieren.** Die Messung nach 0.9.74 zeigt: die
+*Menge* stimmt jetzt (79 628 Byte frei vor dem Start), aber der DRAM ist
+**zersplittert** - der groesste zusammenhaengende Block ist nur noch **272 Byte**
+gross, und selbst der BT-Stack scheitert ("calloc failed", "Failed to send frame
+batch: ESP_ERR_NO_MEM"). In 0.9.56 waren es 95 KB frei mit **69 KB** groesstem
+Block.
+
+Deshalb fordert der Datei-Zweig seine zwei grossen Puffer jetzt **beim
+Pipelineaufbau** an (`reserve_output_payload()` in `stream_proc.c`), solange der
+DRAM noch zusammenhaengt: Dekoderausgang 4608 Byte und der Ausgang des linearen
+Wandlers 5120 Byte, beide mit der vom Port verlangten 16-Byte-Ausrichtung. Sie
+bleiben am Port haengen (der Port gibt seinen `self_payload` erst beim
+Zerstoeren der Pipeline frei, nicht bei Stop/Reset) und werden fuer jeden Titel
+wiederverwendet. `LIN_RESAMPLE_OUT_PAYLOAD_MAX` steht dafuer jetzt im Header -
+es ist ein Vertragswert, den auch `stream_proc.c` braucht.
+
 **0.9.74** - **Ton sauber UND MP3 moeglich.** Zwei Messergebnisse aus derselben
 Sitzung:
 1. Die in 0.9.63 abgeschalteten BT-Profile (HFP, GOEPCS, AVRCP-Cover-Art) sind

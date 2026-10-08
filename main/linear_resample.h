@@ -15,6 +15,19 @@
 
 #pragma once
 
+/*
+ * Groesse, die der Ausgangspuffer des Wandlers IMMER bekommt (0.9.75).
+ *
+ * Der Wert stand bisher nur in linear_resample.c; stream_proc.c braucht ihn
+ * aber, um den Puffer beim Pipelineaufbau vorab zu reservieren (solange der
+ * DRAM zusammenhaengend ist, siehe reserve_output_payload).
+ *
+ * Herleitung: 1152 Frames x 48000/44100 x 2 Kanaele x 2 Byte = 5016, auf die
+ * naechsten 1024 aufgerundet = 5120. Immer dieselbe Groesse, damit der
+ * GMF-Port nicht bei jedem Block umbaut.
+ */
+#define LIN_RESAMPLE_OUT_PAYLOAD_MAX 5120
+
 #include "esp_gmf_element.h"
 #include "esp_gmf_err.h"
 

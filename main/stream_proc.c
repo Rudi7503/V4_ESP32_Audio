@@ -1361,6 +1361,62 @@ static void setup_pipeline_codec2bt(esp_gmf_pool_handle_t pool)
  * ausgibt. Es ist die A2DP-Rate des SBC-Encoders. Die #define stehen weiter
  * oben bei der Wiedergabeliste, weil auch local2bt_play() sie braucht.
  */
+/*
+ * Puffer fuer den Datei-Zweig VORAB anlegen (0.9.75).
+ *
+ * Warum: mit eingeschalteten BT-Profilen (die den Ton glatt halten, siehe
+ * README 0.9.74) ist der DRAM nach dem BT-Init und dem Streamstart so
+ * zersplittert, dass der groesste zusammenhaengende Block nur noch 272 Byte
+ * gross ist (/tmp/final974.log). Eine 4608-Byte-Anforderung des MP3-Dekoders
+ * kann dann nie mehr klappen, und der BT-Stack scheitert gleich mit
+ * ("calloc failed", "Failed to send frame batch: ESP_ERR_NO_MEM").
+ *
+ * Deshalb werden die zwei grossen Puffer des Datei-Zweigs JETZT angefordert -
+ * beim Pipelineaufbau, wo der DRAM noch zusammenhaengend ist. Sie bleiben am
+ * Port haengen (der Port gibt seinen self_payload erst beim Zerstoeren der
+ * Pipeline frei, nicht bei Stop/Reset) und werden fuer jeden Titel
+ * wiederverwendet.
+ */
+static void reserve_output_payload(esp_gmf_pipeline_handle_t pipe,
+                                   const char *tag, int bytes, uint8_t align)
+{
+    esp_gmf_element_handle_t el = NULL;
+    esp_gmf_port_handle_t    out;
+    esp_gmf_payload_t       *load = NULL;
+
+    if (pipe == NULL) {
+        return;
+    }
+    if (esp_gmf_pipeline_get_el_by_name(pipe, tag, &el) != ESP_GMF_ERR_OK || el == NULL) {
+        ESP_LOGW(TAG, "Vorab-Puffer: Element '%s' nicht gefunden", tag);
+        return;
+    }
+    out = ESP_GMF_ELEMENT_GET(el)->out;
+    if (out == NULL) {
+        ESP_LOGW(TAG, "Vorab-Puffer: '%s' hat keinen Ausgang", tag);
+        return;
+    }
+    if (esp_gmf_payload_new(&load) != ESP_GMF_ERR_OK || load == NULL) {
+        ESP_LOGW(TAG, "Vorab-Puffer: Payload fuer '%s' nicht angelegt", tag);
+        return;
+    }
+    load->buf = (uint8_t *)heap_caps_aligned_alloc(align, (size_t)bytes, MALLOC_CAP_DEFAULT);
+    if (load->buf == NULL) {
+        ESP_LOGW(TAG, "Vorab-Puffer: %d Byte fuer '%s' nicht verfuegbar", bytes, tag);
+        esp_gmf_payload_delete(load);
+        return;
+    }
+    load->buf_length = (size_t)bytes;
+    load->needs_free  = 1;
+    if (esp_gmf_port_set_payload(out, load) != ESP_GMF_ERR_OK) {
+        ESP_LOGW(TAG, "Vorab-Puffer: '%s' nahm den Puffer nicht an", tag);
+        esp_gmf_payload_delete(load);
+        return;
+    }
+    ESP_LOGI(TAG, "Vorab-Puffer fuer '%s': %d Byte (Ausrichtung %u) - bleibt reserviert",
+             tag, bytes, (unsigned)align);
+}
+
 static void setup_pipeline_local2bt(esp_gmf_pool_handle_t pool)
 {
     /*
@@ -1429,6 +1485,14 @@ static void setup_pipeline_local2bt(esp_gmf_pool_handle_t pool)
      * sind - das war auf Hardware nicht der Fall. */
 
     esp_gmf_pipeline_bind_task(local2bt_pipe, local2bt_task);
+    /*
+     * 0.9.75: die zwei grossen Puffer des Datei-Zweigs sofort reservieren -
+     * Dekoderausgang (ein MP3-Frame = 4608) und der Ausgang unseres Wandlers
+     * (1152 Frames x 48000/44100 x 2 Kanaele x 2 Byte = 5016, aufgerundet).
+     */
+    reserve_output_payload(local2bt_pipe, "aud_dec", 4608, 16u);
+    reserve_output_payload(local2bt_pipe, "aud_lin_resample_file",
+                           LIN_RESAMPLE_OUT_PAYLOAD_MAX, 16u);
 }
 
 /*
