@@ -281,7 +281,7 @@ static void local2bt_arena_release(void)
          * Log - mit denselben Zahlen wie die spaetere Fehlermeldung, sodass
          * Ursache und Wirkung zusammen sichtbar sind.
          */
-        if (frei < 8192u || gross < 40960u) {
+        if (frei < 8192u || gross < 34816u) {
             ESP_LOGE(TAG, "SPEICHER KNAPP: frei %u, groesster Block %u Byte "
                           "(Dekoder braucht rund 32 KB am Stueck)",
                      (unsigned)frei, (unsigned)gross);

@@ -322,6 +322,7 @@ void bt_mgr_evt_stream(bool streaming)
 
 esp_err_t bt_mgr_scan_start(uint8_t inq_units, uint8_t mode)
 {
+    s_want_autoconnect = false;   /* 0.9.87: der Scan darf nicht gegen die Autoverbindung kaempfen */
     if (inq_units == 0) {
         inq_units = BT_MGR_SCAN_DEF_UNITS;
     }

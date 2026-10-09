@@ -57,6 +57,7 @@ typedef enum {
     DEFER_DIR_OPEN,      /* open a directory (I/O, so not in the hot path) */
     DEFER_FILE_OPEN,     /* open a file      (I/O, so not in the hot path) */
     DEFER_MEDIA_START,   /* start the A2DP stream (0.9.65, needs waiting)  */
+    DEFER_CONNECT,       /* 0.9.87: BT-Verbindung aufbauen - blockiert sonst den Link-Task */
 } defer_op_t;
 
 /*
@@ -212,6 +213,11 @@ static char          s_play_pending_path[SD_FS_PATH_BUF];
 /* Ergebnis der letzten MEDIA_START-Anforderung; BUSY heisst "noch keins". */
 static v4p_status_t  s_media_err = V4P_ST_BUSY;
 static bool          s_media_pending;   /* Start laeuft im Arbeitstask */
+static v4p_status_t  s_conn_err = V4P_ST_BUSY;   /* Ergebnis des letzten Verbindungsversuchs */
+static bool          s_conn_pending;             /* laeuft im Arbeitstask */
+static uint8_t       s_conn_idx;                 /* Ziel als Tabellenindex */
+static uint8_t       s_conn_bda[6];              /* oder als Adresse */
+static bool          s_conn_by_bda;
 static QueueHandle_t s_work_queue;
 
 /* ------------------------------------------------------------------ */
@@ -520,6 +526,19 @@ static void run_deferred(const work_msg_t *w)
         s_media_pending = false;
         break;
     }
+    case DEFER_CONNECT: {
+        esp_err_t err = s_conn_by_bda ? bt_mgr_connect_bda(s_conn_bda)
+                                      : bt_mgr_connect_index(s_conn_idx);
+        if (err == ESP_ERR_INVALID_ARG) {
+            s_conn_err = V4P_ST_NOT_FOUND;
+        } else if (err != ESP_OK) {
+            s_conn_err = V4P_ST_BT_ERR;
+        } else {
+            s_conn_err = V4P_ST_OK;
+        }
+        s_conn_pending = false;
+        break;
+    }
     case DEFER_SD_STOP:
         audio_source_use_i2s();
         s_last_play_err = V4P_ST_OK;
@@ -676,28 +695,26 @@ static void dispatch(uint8_t cmd, uint8_t seq, const uint8_t *p, uint8_t plen,
 
     /* ---------------- bluetooth connection ---------------- */
     case V4P_CMD_CONNECT: {
-        if (plen < 1) {
-            status = V4P_ST_BAD_ARG;
-            break;
-        }
-        esp_err_t err = bt_mgr_connect_index(p[0]);
-        if (err == ESP_ERR_INVALID_ARG) {
-            status = V4P_ST_NOT_FOUND;
-        } else if (err != ESP_OK) {
-            status = V4P_ST_BT_ERR;
-        }
+        if (plen < 1)                   { status = V4P_ST_BAD_ARG; break; }
+        if (s_conn_pending)             { status = V4P_ST_BUSY;    break; }
+        if (s_conn_err != V4P_ST_BUSY)  { status = s_conn_err; s_conn_err = V4P_ST_BUSY; break; }
+        s_conn_idx     = p[0];
+        s_conn_by_bda  = false;
+        s_conn_pending = true;
+        *defer         = DEFER_CONNECT;
+        status         = V4P_ST_BUSY;
         break;
     }
 
     case V4P_CMD_CONNECT_BDA: {
-        if (plen < ESP_BD_ADDR_LEN) {
-            status = V4P_ST_BAD_ARG;
-            break;
-        }
-        esp_err_t err = bt_mgr_connect_bda(p);
-        if (err != ESP_OK) {
-            status = V4P_ST_BT_ERR;
-        }
+        if (plen < ESP_BD_ADDR_LEN)     { status = V4P_ST_BAD_ARG; break; }
+        if (s_conn_pending)             { status = V4P_ST_BUSY;    break; }
+        if (s_conn_err != V4P_ST_BUSY)  { status = s_conn_err; s_conn_err = V4P_ST_BUSY; break; }
+        memcpy(s_conn_bda, p, ESP_BD_ADDR_LEN);
+        s_conn_by_bda  = true;
+        s_conn_pending = true;
+        *defer         = DEFER_CONNECT;
+        status         = V4P_ST_BUSY;
         break;
     }
 

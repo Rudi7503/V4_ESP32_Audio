@@ -1,5 +1,20 @@
 ## Stand
 
+**0.9.87** - **DEFER_CONNECT und Scan-Vorrang.** Der Verbindungsaufbau lief im
+Link-Task und blockierte ihn fuer die Dauer des Versuchs: der I2C-Slave
+antwortete nicht mehr, die V4 sah 62 LINK-Fehler in 3,5 Minuten, und weil der
+Bluetooth-Stack mit Paging beschaeftigt war, lieferte der Inquiry (Scan) keine
+Treffer. Nach der Vorlage von DEFER_MEDIA_START:
+
+- DEFER_CONNECT: der Link-Task merkt die Anforderung nur vor (Antwort BUSY),
+  die Verbindung baut der v4_work-Task auf; das Ergebnis wird einmal gemeldet.
+  Gilt fuer CONNECT (Index) und CONNECT_BDA.
+- bt_mgr_scan_start() setzt s_want_autoconnect = false, damit der Scan nicht
+  gegen die Autoverbindung kaempft (ein manuelles Verbinden schaltet sie
+  ohnehin wieder ein).
+- Heap-Fruehwarnung: Schwelle 40960 -> 34816 (40960 war der Normalfall und
+  meldete falsch Alarm).
+
 **0.9.86** - **Namenlose Geraete bekommen einen Ersatznamen (Ursache der
 leeren Zeile).** Befund aus dem GUI-Test vom 08.10.2026 (/tmp/l3_v4.log):
 
