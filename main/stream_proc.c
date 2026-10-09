@@ -222,7 +222,13 @@ static void dump_pipeline_state(const char *what, esp_gmf_pipeline_handle_t pipe
  * der Chip panickte (StoreProhibited). Mit 36 KB bleiben dem Dekoder ~33 KB,
  * dem System ~6 KB mehr.
  */
-#define LOCAL2BT_ARENA_BYTES  (36u * 1024u)
+/*
+ * 36 -> 38 KB (0.9.83). Messung 0.9.82: bei 36 KB blieben dem Dekoder stabil
+ * 34816 Byte (~32 KB Bedarf, also nur ~2,8 KB Reserve) und von zehn
+ * Durchlaeufen scheiterte einer. Bei 42 KB kippte dagegen der Heap (Panic).
+ * 38 KB ist die Mitte; die ACL-Reduktion auf 1 Verbindung hat +0,7 KB gebracht.
+ */
+#define LOCAL2BT_ARENA_BYTES  (38u * 1024u)
 
 static uint8_t s_local2bt_arena[LOCAL2BT_ARENA_BYTES] __attribute__((aligned(16)));
 static int     s_local2bt_arena_offen;
@@ -262,7 +268,8 @@ static void local2bt_arena_reserve(const char *wer)
 /* Messpunkt vor dem Dekoderstart - der Bereich bleibt angemeldet. */
 static void local2bt_arena_release(void)
 {
-    ESP_LOGI(TAG, "Dekoder-Arena: groesster Block vor dem Dekoderstart %u Byte",
+    ESP_LOGI(TAG, "Heap vor dem Dekoderstart: frei %u, groesster Block %u Byte",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
              (unsigned)local2bt_groesster());
 }
 
