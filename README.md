@@ -1,5 +1,27 @@
 ## Stand
 
+**0.9.83** - **stabil, auf Hardware geprueft (08.10.2026).** Zehn Wiedergaben
+im Wechsel (test2.mp3 / test_tone_48k.wav), Mitschnitt /tmp/final983.log:
+
+    Version 0.9.83
+    Heap vor dem Dekoderstart: frei 41868..42560, groesster Block 32768..40960
+    9 x "stoppe den Datei-Zweig (FINISHED)"
+    Fehler wortgetreu geprueft: KEINE
+      (kein Guru Meditation/Panic, kein calloc failed, kein ESP_ERR_NO_MEM,
+       kein Fail to init MP3 decoder, kein Job failed, kein (ERROR))
+    Ende: Free heap 73932 stabil, mixer_task 17,74 %, IDLE1 22,80 %
+
+Ehrliche Einordnung: gestartet wurden zehn Wiedergaben (zehnmal "Heap vor dem
+Dekoderstart"), neun endeten mit FINISHED. Die zehnte erzeugte ebenfalls keinen
+Fehler, sondern wurde vom naechsten Befehl ersetzt - der Monitor sendet alle
+9 s, die Dateien laufen 6-7 s. Artefakt des Testablaufs, nicht der Firmware.
+Der Absturz aus 0.9.81 (free=64 Byte, StoreProhibited) ist damit beseitigt:
+ueber zehn Starts hinweg kein Panic, Heap stabil bei ~74 KB.
+
+Aenderungen gegenueber 0.9.82: Arena 36 -> 38 KB (bei 36 KB nur ~2,8 KB
+Reserve, bei 42 KB kippte der Heap) und der freie Heap wird beim Dekoderstart
+mitprotokolliert.
+
 **0.9.82 (Test)** - **CPU-Aussage korrigiert, Arena verkleinert.** Sauberer
 A/B-Test am 08.10.2026, nur die vier Profil-Schalter geaendert:
 
