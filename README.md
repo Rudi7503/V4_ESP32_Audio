@@ -1,5 +1,24 @@
 ## Stand
 
+**0.9.85 verifiziert (08.10.2026).** Gegenversuch mit beiden Konsolen parallel
+mitgelesen (ESP32 /dev/ttyUSB0, V4-Debug-UART CH340), waehrend die MUI-GUI
+belastet wurde (Liste, Verzeichniswechsel, Scrollen, Status, Trennen/Verbinden):
+
+    ESP32: Panics/Backtraces 0, Speicherfehler 0, 17 Zeilen (ruhige Konsole)
+    V4   : LINK-Fehler 0
+           [liste] "": 73 Eintraege        (dreimal, vorher 0)
+           [status] Zustand 3, SD eingehaengt, frei 58702320 KB   (stabil)
+
+Damit ist die Regression aus 0.9.78 behoben: mit V4_LINK_TASK_STACK 4096 und
+V4_WORK_TASK_STACK 3072 (vorher 3072/2048) tritt der Stack-Schaden nicht mehr
+auf. Der Absturz vom selben Tag (Backtrace mit 0xa5a5a5a5, "|<-CORRUPTED")
+hatte sich der V4 nur als "LINK-Fehler (keine gueltige Antwort)", "Zustand 1"
+und leerer Dateiliste gezeigt - die SD-Karte war nie beteiligt.
+
+Hinweis zur Aussagekraft: in diesem Fenster lief keine Wiedergabe (ESP32-Konsole
+ruhig, 0 Wiedergabe-Enden). Der Tonpfad war zuvor mit 0.9.84 separat geprueft
+(10 von 10 FINISHED, keine Fehlerzeile).
+
 **0.9.85** - **Regression aus 0.9.78 behoben: Bruecken-Stacks wieder gross.**
 Am 08.10.2026 stuerzte der ESP32 waehrend der GUI-Arbeit ab; der Mitschnitt der
 ESP32-Konsole (/dev/ttyUSB0) zeigt:
