@@ -146,3 +146,8 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=3072
 
 # Nur eine Verbindung (0.9.82): wir koppeln genau ein Geraet.
 CONFIG_BT_ACL_CONNECTIONS=1
+
+# 0.9.85: Stack-Ueberlauf sicher erkennen (Methode 2). Der Absturz vom
+# 08.10.2026 hinterliess einen korrupten Backtrace - mit dieser Pruefung nennt
+# FreeRTOS die betroffene Aufgabe ("A stack overflow in task ...").
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_METHOD2=y

@@ -1,5 +1,25 @@
 ## Stand
 
+**0.9.85** - **Regression aus 0.9.78 behoben: Bruecken-Stacks wieder gross.**
+Am 08.10.2026 stuerzte der ESP32 waehrend der GUI-Arbeit ab; der Mitschnitt der
+ESP32-Konsole (/dev/ttyUSB0) zeigt:
+
+    Backtrace: 0x40091b31:0x3ffe3440 ... 0x40092162:0xa5a5a5a5 |<-CORRUPTED
+
+`0xa5a5a5a5` ist das Fuellmuster unbenutzten Stacks, `CORRUPTED` heisst: der
+Stack wurde ueberschrieben - ein Ueberlauf. Die V4 sah davon nur
+`LINK-Fehler (keine gueltige Antwort)`, `Zustand 1` statt `3` und eine leere
+Dateiliste; die SD-Karte war nie beteiligt.
+
+Ursache: In 0.9.78 wurden fuer den MP3-Speicher `V4_LINK_TASK_STACK` auf 3072
+und `V4_WORK_TASK_STACK` auf 2048 gekuerzt - die Messung (2352 / 780 Byte)
+stammte aber aus dem Konsolenverkehr. Die GUI fragt mit Wiederholungen und
+vielen Transaktionen hintereinander und laeuft tiefer in den Stack.
+
+Fix: 4096 bzw. 3072 (+2 KB), zusaetzlich
+`CONFIG_FREERTOS_CHECK_STACKOVERFLOW_METHOD2=y`, damit ein Ueberlauf kuenftig
+die Aufgabe nennt statt einen korrupten Backtrace zu hinterlassen.
+
 **0.9.83** - **stabil, auf Hardware geprueft (08.10.2026).** Zehn Wiedergaben
 im Wechsel (test2.mp3 / test_tone_48k.wav), Mitschnitt /tmp/final983.log:
 

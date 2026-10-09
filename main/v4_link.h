@@ -75,12 +75,16 @@ extern "C" {
  *   v4_link (dispatch -> sd_fs -> VFS -> FatFs): 2352 Byte gebraucht
  *   v4_work (verzoegerte Arbeit, flach):          780 Byte gebraucht
  *
- * 0.9.78: 3072 bzw. 2048 - die Messung (2352 / 780 Byte) laesst 720 bzw.
- * 1268 Byte Reserve. Damit sind es zusammen 5 KB statt 12 KB beim ersten Wurf. 'v4_bus' zeigt den
+ * 0.9.85: 4096 bzw. 3072. Die Kuerzung auf 3072/2048 in 0.9.78 war eine
+ * Regression: die Messung (2352 / 780 Byte) stammte aus dem Konsolenverkehr,
+ * die MUI-GUI haemmert den Vertrag aber mit Wiederholungen und vielen
+ * Transaktionen hintereinander - am 08.10.2026 endete das in einem korrupten
+ * Backtrace (0xa5a5a5a5, "|<-CORRUPTED"), also einem Stack-Ueberlauf, und die
+ * V4 sah nur "LINK-Fehler (keine gueltige Antwort)". 'v4_bus' zeigt den
  * kleinsten Rest seit dem Start an.
  */
-#define V4_LINK_TASK_STACK      3072
-#define V4_WORK_TASK_STACK      2048
+#define V4_LINK_TASK_STACK      4096
+#define V4_WORK_TASK_STACK      3072
 #define V4_TASK_PRIO            6
 
 /**

@@ -268,9 +268,25 @@ static void local2bt_arena_reserve(const char *wer)
 /* Messpunkt vor dem Dekoderstart - der Bereich bleibt angemeldet. */
 static void local2bt_arena_release(void)
 {
-    ESP_LOGI(TAG, "Heap vor dem Dekoderstart: frei %u, groesster Block %u Byte",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
-             (unsigned)local2bt_groesster());
+    {
+        size_t frei = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+        size_t gross = local2bt_groesster();
+
+        ESP_LOGI(TAG, "Heap vor dem Dekoderstart: frei %u, groesster Block %u Byte",
+                 (unsigned)frei, (unsigned)gross);
+        /*
+         * Fruehwarnung (0.9.84). Der Absturz aus 0.9.81 kam ohne Vorwarnung:
+         * der Heap lief auf free=64 Byte, dann panickte der BT-Stack beim
+         * calloc. Diese Zeile steht jetzt VOR einem moeglichen Fehlschlag im
+         * Log - mit denselben Zahlen wie die spaetere Fehlermeldung, sodass
+         * Ursache und Wirkung zusammen sichtbar sind.
+         */
+        if (frei < 8192u || gross < 40960u) {
+            ESP_LOGE(TAG, "SPEICHER KNAPP: frei %u, groesster Block %u Byte "
+                          "(Dekoder braucht rund 32 KB am Stueck)",
+                     (unsigned)frei, (unsigned)gross);
+        }
+    }
 }
 
 static void local2bt_request_stop(void)
