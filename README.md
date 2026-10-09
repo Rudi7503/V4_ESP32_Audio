@@ -1,5 +1,24 @@
 ## Stand
 
+**0.9.82 (Test)** - **CPU-Aussage korrigiert, Arena verkleinert.** Sauberer
+A/B-Test am 08.10.2026, nur die vier Profil-Schalter geaendert:
+
+    Zustand              Profile an          Profile aus
+    nur V4-Ton      mixer 17,96 % / 22,24 %   21,04 % / 17,47 %
+    nach test2.mp3  mixer 18,14 % / 21,49 %   24,05 % / 10,40 %
+    freier Heap         73 988 Byte           83 136 Byte
+
+Also **+3 bis +6 Prozentpunkte, nicht Faktor 2**. Die frueher dokumentierte
+"Verdopplung (17 % -> 33 %)" war ueberzogen: die 33 % stammten aus dem alten
+Build-Zustand (I2C-Puffer 1152/1036, Stacks 2x6144). Profile bleiben trotzdem
+**an** (weniger CPU, Klang verifiziert), aber die Begruendung ist korrigiert.
+
+Aenderungen in diesem Test:
+- Arena 42 -> 36 KB: der Dekoder bekam 38,9-40,9 KB bei ~32 KB Bedarf; die
+  42-KB-Arena liess dem BT-Stack zu wenig, im laengeren Betrieb fiel der Heap
+  auf free=64 Byte und der Chip panickte (StoreProhibited).
+- CONFIG_BT_ACL_CONNECTIONS 4 -> 1 (wir koppeln genau ein Geraet).
+
 **0.9.80** - **Dekoder-Arena: Freigabe hinter den Aufbau - NICHT ausreichend.**
 Am 08.10.2026 mit 5 Durchläufen im Wechsel geprueft (Mitschnitt /tmp/test5x.log):
 

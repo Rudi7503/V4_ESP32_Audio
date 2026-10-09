@@ -215,7 +215,14 @@ static void dump_pipeline_state(const char *what, esp_gmf_pipeline_handle_t pipe
  * ACHTUNG: Abmelden nur, wenn der Datei-Zweig wirklich geschlossen ist -
  * heap_caps_remove_region darf keine lebenden Allokationen mehr enthalten.
  */
-#define LOCAL2BT_ARENA_BYTES  (42u * 1024u)
+/*
+ * 42 -> 36 KB (0.9.82). Der Dekoder bekam mit 42 KB durchgehend 38,9-40,9 KB
+ * (Bedarf ~32 KB), also sind 6 KB verschenkt - und die fehlten dem BT-Stack:
+ * mit der 42-KB-Arena lief der Heap im laengeren Betrieb auf free=64 Byte und
+ * der Chip panickte (StoreProhibited). Mit 36 KB bleiben dem Dekoder ~33 KB,
+ * dem System ~6 KB mehr.
+ */
+#define LOCAL2BT_ARENA_BYTES  (36u * 1024u)
 
 static uint8_t s_local2bt_arena[LOCAL2BT_ARENA_BYTES] __attribute__((aligned(16)));
 static int     s_local2bt_arena_offen;
