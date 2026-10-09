@@ -1,5 +1,28 @@
 ## Stand
 
+**0.9.86** - **Namenlose Geraete bekommen einen Ersatznamen (Ursache der
+leeren Zeile).** Befund aus dem GUI-Test vom 08.10.2026 (/tmp/l3_v4.log):
+
+    [scan] 2 Geraet(e) gefunden
+    [scan]   PXC Speaker
+    [scan]   (leer)
+    [verbinden]  -> OK                      <- mit leerem Namen verbunden!
+    [status] Zustand 2, Verbindung keine    <- Bruecke im Zustand CONNECTING
+    [play] test2.mp3 -> BAD_STATE           <- Wiedergabe blockiert
+    ... 8x LINK-Fehler (Link-Task durch den Verbindungsversuch belegt)
+
+Meine erste Vermutung (Zaehlfehler) war falsch: bt_manager.c zaehlt korrekt.
+Die Ursache steht dort aber sichtbar - neue Funde werden SOFORT angelegt
+(s_devs[idx].name[0] = '\0'), der Name kommt erst mit dem Namensabruf nach.
+Bleibt er aus, liefert die Bruecke eine leere Zeile.
+
+Fix: in DEV_GET bekommen namenlose Funde den Ersatznamen "(ohne Namen)".
+Damit ist die Zeile nicht mehr leer und die Auswahl eindeutig.
+
+Noch offen: CONNECT laeuft im Link-Task und blockiert ihn fuer die Dauer des
+Versuchs - daher die LINK-Fehler-Kaskade. Naechster Schritt: CONNECT wie die
+SD-Operationen verzoegern (DEFER), damit der Slave weiter antwortet.
+
 **0.9.85 verifiziert (08.10.2026).** Gegenversuch mit beiden Konsolen parallel
 mitgelesen (ESP32 /dev/ttyUSB0, V4-Debug-UART CH340), waehrend die MUI-GUI
 belastet wurde (Liste, Verzeichniswechsel, Scrollen, Status, Trennen/Verbinden):

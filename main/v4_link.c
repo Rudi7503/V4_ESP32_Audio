@@ -647,6 +647,20 @@ static void dispatch(uint8_t cmd, uint8_t seq, const uint8_t *p, uint8_t plen,
             status = V4P_ST_NOT_FOUND;
             break;
         }
+        /*
+         * 0.9.86: Geraete ohne Namen bekommen einen Ersatznamen. In der
+         * Geraetetabelle werden Funde sofort angelegt (bt_manager.c:
+         * s_devs[idx].name[0] = '\0'), der Name kommt erst mit dem
+         * Namensabruf nach. Bleibt er aus, lieferte die Bruecke eine LEERE
+         * Zeile - und die GUI verband dann einen Eintrag ohne Namen
+         * ("[verbinden]  -> OK"), was die Bruecke in den Zustand CONNECTING
+         * brachte und die Wiedergabe mit BAD_STATE blockierte.
+         */
+        if (dev.name_len == 0) {
+            const char *ersatz = "(ohne Namen)";
+            (void)snprintf(dev.name, sizeof(dev.name), "%s", ersatz);
+            dev.name_len = (uint8_t)strlen(dev.name);
+        }
         uint8_t name_len = dev.name_len;
         if (name_len > (V4P_READ_PAYLOAD_MAX - V4P_DEV_OFF_NAME)) {
             name_len = V4P_READ_PAYLOAD_MAX - V4P_DEV_OFF_NAME;
