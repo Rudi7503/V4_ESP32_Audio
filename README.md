@@ -15,16 +15,29 @@ am Stueck, und der Aufbau des Datei-Zweigs verbraucht davon 9 216 Byte - der
 Wettlauf bleibt. **Kein verifizierter Stand.** Naechster Versuch: Arena auf
 rund 42 KB (32 KB Bedarf + ~9 KB Aufbau) oder der statische Bereich in .bss.
 
-**0.9.81** - **Weg 2: statischer Bereich in `.bss`.** Der MP3-Dekoder braucht
-rund 32 KB am Stueck, der Aufbau des Datei-Zweigs nimmt davon ~9 KB (gemessen
-0.9.80: 36 864 -> 27 648 Byte). Deshalb liegt die Arena jetzt als statisches
-Feld in `.bss` - per Definition zusammenhaengend und nicht zersplitterbar - und
-wird einmal beim Start als Heap-Bereich angemeldet
-(`heap_caps_add_region`, 42 KB). `heap_caps_remove_region` gibt es in dieser
-IDF-Version nicht, und es ist auch nicht noetig: multi_heap vergibt nach
-Best-Fit, kleine Anforderungen greifen den grossen Block nicht an. Nach dem
-Aufbau des Datei-Zweigs bleiben 33 KB - genug fuer den Dekoder.
-**Noch nicht auf Hardware verifiziert.**
+**0.9.81** - **Weg 2, auf Hardware verifiziert (08.10.2026).** Fuenf
+Durchlaeufe im Wechsel auf der V4, **alle sauber** (Mitschnitt /tmp/test5x_981.log):
+
+    1. test2.mp3           -> No more data, FINISHED
+    2. test_tone_48k.wav   -> No more data, FINISHED
+    3. test2.mp3           -> No more data, FINISHED
+    4. test_tone_48k.wav   -> No more data, FINISHED
+    5. test2.mp3           -> No more data, FINISHED
+
+    Dekoder-Arena beim Start: 43008 Byte angemeldet, groesster Block 110592
+    groesster Block vor dem Dekoderstart: 38912 .. 40960 Byte
+    mixer_task 18,12 %, IDLE1 22,11 %
+    keine Fail to init MP3 decoder, kein Job failed, kein calloc failed
+
+Die Arena liegt als statisches Feld in `.bss` (42 KB) und wird einmal beim
+Start als Heap-Bereich angemeldet (`heap_caps_add_region`). Der Aufbau des
+Datei-Zweigs nimmt davon nur ~1-2 KB, dem Dekoder bleiben durchgehend 38-40 KB
+am Stueck. `heap_caps_remove_region` gibt es in dieser IDF-Version nicht und
+wird nicht gebraucht: multi_heap vergibt nach Best-Fit, kleine Anforderungen
+greifen den grossen Block nicht an.
+
+**Damit laufen MP3 und WAV von der SD-Karte zuverlaessig - gleichzeitig mit dem
+V4-Ton ueber I2S.**
 
 ## Stand
 
